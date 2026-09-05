@@ -39,8 +39,8 @@ const SHOWCASE_MARKDOWN = `---
 marp: true
 theme: academic
 paginate: true
-header: 'MarkSlide Studio · 交互式用户指南'
-footer: '© 2026 MarkSlide 极客智能讲台'
+header: 'MarkSlide · 交互式用户指南'
+footer: '© 2026 Techarts'
 ---
 
 <!-- _class: lead -->
@@ -922,10 +922,10 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                 <div
                   key={activePreviewIndex}
                   className={`w-full h-full ${previewDirection === 'next'
-                      ? 'animate-slide-next'
-                      : previewDirection === 'prev'
-                        ? 'animate-slide-prev'
-                        : 'animate-slide-in'
+                    ? 'animate-slide-next'
+                    : previewDirection === 'prev'
+                      ? 'animate-slide-prev'
+                      : 'animate-slide-in'
                     } flex items-center justify-center [&>div.marpit]:w-full [&>div.marpit]:h-full [&_svg[data-marpit-svg]]:w-full [&_svg[data-marpit-svg]]:h-full`}
                   dangerouslySetInnerHTML={{
                     __html:
