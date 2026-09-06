@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Terminal, Mail, Lock, Sparkles, ArrowRight } from 'lucide-react';
 import type { AuthUser } from '../types/explorer';
+import { useI18n } from '../i18n/I18nContext';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -9,6 +10,7 @@ interface AuthModalProps {
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSuccess }) => {
+  const { t } = useI18n();
   const [tab, setTab] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -22,11 +24,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
     setError(null);
 
     if (!email || !email.includes('@')) {
-      setError('请输入有效的邮箱地址');
+      setError(t('auth.errValidEmail'));
       return;
     }
     if (password.length < 6) {
-      setError('密码长度需至少 6 位');
+      setError(t('auth.errPasswordLen'));
       return;
     }
 
@@ -53,7 +55,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
         <button
           onClick={onClose}
           className="absolute top-4 right-4 p-1.5 text-[#8a91a8] hover:text-slate-200 hover:bg-[#1f2235] rounded-lg transition-colors"
-          title="关闭弹窗，以访客模式体验全部本地功能"
+          title={t('auth.guestBypass')}
         >
           <X size={16} />
         </button>
@@ -62,11 +64,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
         <div className="flex items-center gap-2 text-sky-400 mb-2">
           <Terminal size={20} />
           <span className="font-bold text-base tracking-wider text-slate-100 font-sans">
-            MarkSlide<span className="text-sky-400 font-mono text-xs ml-1 font-normal">Cloud</span>
+            HatePPT<span className="text-sky-400 font-mono text-xs ml-1 font-normal">Cloud</span>
           </span>
         </div>
         <p className="text-xs text-[#8a91a8] mb-5 leading-relaxed">
-          纯文本驱动的出版级高质感演示系统 · 登录即可开启无限层级文稿管理与多端实时同步
+          {t('auth.cloudSubtitle')}
         </p>
 
         {/* 登录 / 注册 Tab 切换 */}
@@ -81,7 +83,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
               tab === 'login' ? 'text-sky-400 font-semibold' : 'text-[#8a91a8] hover:text-slate-200'
             }`}
           >
-            登录账号
+            {t('auth.tabLogin')}
             {tab === 'login' && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-400 rounded-full" />
             )}
@@ -96,7 +98,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
               tab === 'register' ? 'text-sky-400 font-semibold' : 'text-[#8a91a8] hover:text-slate-200'
             }`}
           >
-            注册新账号
+            {t('auth.tabRegister')}
             {tab === 'register' && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-400 rounded-full" />
             )}
@@ -112,7 +114,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
           )}
 
           <div>
-            <label className="block text-slate-300 font-medium mb-1">电子邮箱</label>
+            <label className="block text-slate-300 font-medium mb-1">{t('auth.emailLabel')}</label>
             <div className="relative flex items-center">
               <span className="absolute left-3 text-[#717894]">
                 <Mail size={14} />
@@ -122,14 +124,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@example.com"
+                placeholder={t('auth.emailPlaceholder')}
                 className="w-full bg-[#191b2a] border border-[#2a2d42] rounded-lg pl-9 pr-3 py-2 text-slate-100 placeholder:text-[#5e657f] focus:outline-none focus:border-sky-400 transition-colors"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-slate-300 font-medium mb-1">登录密码</label>
+            <label className="block text-slate-300 font-medium mb-1">{t('auth.passwordLabel')}</label>
             <div className="relative flex items-center">
               <span className="absolute left-3 text-[#717894]">
                 <Lock size={14} />
@@ -139,7 +141,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="至少 6 位字符"
+                placeholder={t('auth.passwordPlaceholder')}
                 className="w-full bg-[#191b2a] border border-[#2a2d42] rounded-lg pl-9 pr-3 py-2 text-slate-100 placeholder:text-[#5e657f] focus:outline-none focus:border-sky-400 transition-colors"
               />
             </div>
@@ -151,11 +153,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
             className="w-full mt-2 bg-sky-400 hover:bg-sky-300 text-slate-950 font-bold py-2 rounded-lg shadow-md shadow-sky-950/40 flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] disabled:opacity-50"
           >
             {isLoading ? (
-              <span>处理中...</span>
+              <span>{t('auth.btnProcessing')}</span>
             ) : (
               <>
                 <Sparkles size={14} />
-                <span>{tab === 'login' ? '立即登录' : '创建免费账号'}</span>
+                <span>{tab === 'login' ? t('auth.btnLogin') : t('auth.btnRegister')}</span>
               </>
             )}
           </button>
@@ -168,7 +170,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
             onClick={onClose}
             className="text-[#8a91a8] hover:text-sky-400 text-xs flex items-center justify-center gap-1 mx-auto transition-colors group"
           >
-            <span>暂不登录，以访客模式体验全部本地功能</span>
+            <span>{t('auth.guestBypass')}</span>
             <ArrowRight size={12} className="group-hover:translate-x-0.5 transition-transform" />
           </button>
         </div>

@@ -13,6 +13,7 @@ import {
   FilePlus,
 } from 'lucide-react';
 import type { ExplorerData, FolderItem, SlideDoc } from '../types/explorer';
+import { useI18n } from '../i18n/I18nContext';
 
 interface SlideExplorerProps {
   isOpen: boolean;
@@ -43,6 +44,7 @@ export const SlideExplorer: React.FC<SlideExplorerProps> = ({
   onRenameFolder,
   onToggleFolder,
 }) => {
+  const { t } = useI18n();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string>('');
 
@@ -66,21 +68,21 @@ export const SlideExplorer: React.FC<SlideExplorerProps> = ({
     setEditingId(null);
   };
 
-  // 递归渲染文件夹树
+  // 递归渲染文件夹节点
   const renderFolder = (folder: FolderItem, depth = 0) => {
     const isEditing = editingId === folder.id;
-    const paddingLeft = depth * 14 + 10;
+    const paddingLeft = depth * 14 + 6;
 
     return (
       <div key={folder.id} className="select-none text-xs font-sans">
-        {/* 文件夹头部 */}
+        {/* 文件夹头部行 */}
         <div
           style={{ paddingLeft: `${paddingLeft}px` }}
-          className="group flex items-center justify-between py-1.5 pr-2 hover:bg-slate-800/60 rounded-md cursor-pointer text-slate-300 transition-colors"
+          className="group flex items-center justify-between py-1.5 pr-2 rounded-md hover:bg-[#1a1d2e] cursor-pointer transition-colors text-[#c8cde0]"
           onClick={() => onToggleFolder(folder.id)}
         >
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
-            <span className="text-slate-500 hover:text-slate-300 transition-transform">
+            <span className="text-[#717894] hover:text-slate-300 transition-transform">
               {folder.isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             </span>
             <span className="text-amber-400 shrink-0">
@@ -98,7 +100,7 @@ export const SlideExplorer: React.FC<SlideExplorerProps> = ({
                   if (e.key === 'Escape') setEditingId(null);
                 }}
                 onClick={(e) => e.stopPropagation()}
-                className="bg-slate-950 text-slate-100 px-1 py-0.5 rounded border border-cyan-500 text-xs w-full focus:outline-none"
+                className="bg-[#181a28] text-slate-100 px-1 py-0.5 rounded border border-sky-500 text-xs w-full focus:outline-none"
               />
             ) : (
               <span className="truncate font-medium text-slate-200" title={folder.name}>
@@ -114,33 +116,33 @@ export const SlideExplorer: React.FC<SlideExplorerProps> = ({
           >
             <button
               onClick={() => onCreateSlide(folder.id)}
-              className="p-1 hover:text-cyan-400 hover:bg-slate-700/60 rounded"
-              title="在此目录下新建 Slide"
+              className="p-1 hover:text-sky-400 hover:bg-[#23273c] rounded"
+              title={t('explorer.newSlideInFolder')}
             >
               <Plus size={12} />
             </button>
             <button
               onClick={() => onCreateFolder(folder.id)}
-              className="p-1 hover:text-amber-400 hover:bg-slate-700/60 rounded"
-              title="新建子文件夹"
+              className="p-1 hover:text-amber-400 hover:bg-[#23273c] rounded"
+              title={t('explorer.newSubFolder')}
             >
               <FolderPlus size={12} />
             </button>
             <button
               onClick={() => handleStartRename(folder.id, folder.name)}
-              className="p-1 hover:text-sky-400 hover:bg-slate-700/60 rounded"
-              title="重命名"
+              className="p-1 hover:text-sky-400 hover:bg-[#23273c] rounded"
+              title={t('explorer.rename')}
             >
               <Edit2 size={11} />
             </button>
             <button
               onClick={() => {
-                if (window.confirm(`确定删除文件夹 "${folder.name}" 及其所有文稿吗？`)) {
+                if (window.confirm(t('explorer.deleteFolderConfirm', { name: folder.name }))) {
                   onDeleteFolder(folder.id);
                 }
               }}
-              className="p-1 hover:text-rose-400 hover:bg-slate-700/60 rounded"
-              title="删除文件夹"
+              className="p-1 hover:text-rose-400 hover:bg-[#23273c] rounded"
+              title={t('explorer.delete')}
             >
               <Trash2 size={11} />
             </button>
@@ -157,7 +159,7 @@ export const SlideExplorer: React.FC<SlideExplorerProps> = ({
                 style={{ paddingLeft: `${(depth + 1) * 14 + 14}px` }}
                 className="py-1 text-[11px] text-[#636b85] italic"
               >
-                空文件夹
+                {t('explorer.emptyFolder')}
               </div>
             )}
           </div>
@@ -214,18 +216,18 @@ export const SlideExplorer: React.FC<SlideExplorerProps> = ({
           <button
             onClick={() => handleStartRename(slide.id, slide.title)}
             className="p-1 hover:text-sky-400 hover:bg-[#23273c] rounded"
-            title="重命名"
+            title={t('explorer.rename')}
           >
             <Edit2 size={11} />
           </button>
           <button
             onClick={() => {
-              if (window.confirm(`确定删除幻灯片 "${slide.title}" 吗？`)) {
+              if (window.confirm(t('explorer.deleteSlideConfirm', { title: slide.title }))) {
                 onDeleteSlide(slide.id);
               }
             }}
             className="p-1 hover:text-rose-400 hover:bg-[#23273c] rounded"
-            title="删除"
+            title={t('explorer.delete')}
           >
             <Trash2 size={11} />
           </button>
@@ -239,27 +241,27 @@ export const SlideExplorer: React.FC<SlideExplorerProps> = ({
       {/* Explorer 头部 */}
       <div className="h-9 px-3 border-b border-[#232536] bg-[#161828] flex items-center justify-between text-xs text-[#8a91a8] shrink-0">
         <span className="font-semibold text-slate-200 tracking-wider text-[11px] uppercase font-mono flex items-center gap-1.5">
-          文稿库 · EXPLORER
+          {t('explorer.title')}
         </span>
         <div className="flex items-center gap-1">
           <button
             onClick={() => onCreateSlide()}
             className="p-1 hover:text-sky-400 hover:bg-[#1f2235] rounded transition-colors text-[#8a91a8]"
-            title="新建根幻灯片 (.md)"
+            title={t('explorer.newSlide')}
           >
             <FilePlus size={13} />
           </button>
           <button
             onClick={() => onCreateFolder()}
             className="p-1 hover:text-amber-400 hover:bg-[#1f2235] rounded transition-colors text-[#8a91a8]"
-            title="新建根文件夹"
+            title={t('explorer.newFolder')}
           >
             <FolderPlus size={13} />
           </button>
           <button
             onClick={onClose}
             className="p-1 hover:text-slate-200 hover:bg-[#1f2235] rounded transition-colors text-[#717894]"
-            title="收起文稿库 (Ctrl+B)"
+            title={t('explorer.collapse')}
           >
             <X size={13} />
           </button>
@@ -276,17 +278,17 @@ export const SlideExplorer: React.FC<SlideExplorerProps> = ({
 
         {data.folders.length === 0 && data.slides.length === 0 && (
           <div className="py-8 text-center text-xs text-[#717894]">
-            暂无文稿，点击右上角新建
+            {t('explorer.emptyList')}
           </div>
         )}
       </div>
 
       {/* 底部极简状态指示 */}
       <div className="h-7 px-3 border-t border-[#232536] bg-[#121420] flex items-center justify-between text-[11px] text-[#717894] font-mono">
-        <span>MarkSlide Studio</span>
+        <span>{t('explorer.cloudReady')}</span>
         <span className="text-emerald-400 flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
-          本地就绪
+          {t('explorer.localReady')}
         </span>
       </div>
     </aside>

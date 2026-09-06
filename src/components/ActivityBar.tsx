@@ -10,6 +10,7 @@ import {
   Lock,
 } from 'lucide-react';
 import type { AuthUser } from '../types/explorer';
+import { useI18n } from '../i18n/I18nContext';
 
 export type ActivityTab = 'explorer' | 'search' | 'outline' | 'themes' | null;
 
@@ -30,6 +31,7 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
   onOpenShortcuts,
   onOpenSubscription,
 }) => {
+  const { t } = useI18n();
   const isLocked = !currentUser;
 
   const handleItemClick = (tab: ActivityTab) => {
@@ -63,13 +65,13 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
           <div
             onClick={onOpenAuth}
             className="w-full flex flex-col items-center py-1 mb-0.5 cursor-pointer text-amber-400/90 hover:text-amber-300 transition-colors group relative"
-            title="云端功能已锁定 · 点击登录解锁"
+            title={t('activityBar.lockedTip')}
           >
             <div className="w-6 h-6 rounded-md bg-amber-500/10 border border-amber-500/30 flex items-center justify-center shadow-sm">
               <Lock size={12} className="text-amber-400" />
             </div>
             <div className="absolute left-12 top-1 px-2.5 py-1 bg-[#171927] text-amber-300 text-xs rounded-md shadow-xl border border-amber-500/30 whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
-              云端功能已锁定 · 点击登录解锁
+              {t('activityBar.lockedTip')}
             </div>
           </div>
         )}
@@ -100,11 +102,11 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
           <div className="absolute left-12 top-1.5 px-2.5 py-1 bg-[#171927] text-[#e2e5f2] text-xs rounded-md shadow-xl border border-[#2b2e42] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
             {isLocked ? (
               <span className="text-amber-400 font-medium">
-                云端文稿库 · <span className="underline">登录解锁</span>
+                {t('activityBar.explorerLocked')}
               </span>
             ) : (
               <>
-                文稿库 · Explorer <span className="text-[#636b85] font-mono text-[10px] ml-1">(Ctrl+B)</span>
+                {t('activityBar.explorer')} <span className="text-[#636b85] font-mono text-[10px] ml-1">(Ctrl+B)</span>
               </>
             )}
           </div>
@@ -134,9 +136,9 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
           </button>
           <div className="absolute left-12 top-1.5 px-2.5 py-1 bg-[#171927] text-[#e2e5f2] text-xs rounded-md shadow-xl border border-[#2b2e42] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
             {isLocked ? (
-              <span className="text-amber-400 font-medium">幻灯片大纲 · 登录解锁</span>
+              <span className="text-amber-400 font-medium">{t('activityBar.outlineLocked')}</span>
             ) : (
-              '幻灯片大纲 · Outline'
+              t('activityBar.outline')
             )}
           </div>
         </div>
@@ -165,9 +167,9 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
           </button>
           <div className="absolute left-12 top-1.5 px-2.5 py-1 bg-[#171927] text-[#e2e5f2] text-xs rounded-md shadow-xl border border-[#2b2e42] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
             {isLocked ? (
-              <span className="text-amber-400 font-medium">云端文稿搜索 · 登录解锁</span>
+              <span className="text-amber-400 font-medium">{t('activityBar.searchLocked')}</span>
             ) : (
-              '云端文稿搜索 · Search'
+              t('activityBar.search')
             )}
           </div>
         </div>
@@ -196,9 +198,9 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
           </button>
           <div className="absolute left-12 top-1.5 px-2.5 py-1 bg-[#171927] text-[#e2e5f2] text-xs rounded-md shadow-xl border border-[#2b2e42] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
             {isLocked ? (
-              <span className="text-amber-400 font-medium">云端主题市场 · 登录解锁</span>
+              <span className="text-amber-400 font-medium">{t('activityBar.themesLocked')}</span>
             ) : (
-              '主题市场与模板库 · Themes'
+              t('activityBar.themes')
             )}
           </div>
         </div>
@@ -226,11 +228,11 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
           </button>
           <div className="absolute left-12 top-1.5 px-2.5 py-1 bg-[#171927] text-[#e2e5f2] text-xs rounded-md shadow-xl border border-[#2b2e42] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
             {isLocked ? (
-              <span className="text-amber-400 font-medium">会员订阅与特权 · 登录解锁</span>
+              <span className="text-amber-400 font-medium">{t('activityBar.subscriptionLocked')}</span>
             ) : currentUser?.tier === 'pro' ? (
-              <span className="text-amber-300 font-medium">HatePPT Pro 尊贵会员 (已激活)</span>
+              <span className="text-amber-300 font-medium">{t('activityBar.subscriptionActive')}</span>
             ) : (
-              <span className="text-amber-400 font-medium">开通 Pro 会员与云端特权</span>
+              <span className="text-amber-400 font-medium">{t('activityBar.subscription')}</span>
             )}
           </div>
         </div>
@@ -247,7 +249,7 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
             <Keyboard size={18} />
           </button>
           <div className="absolute left-12 bottom-1.5 px-2.5 py-1 bg-[#171927] text-[#e2e5f2] text-xs rounded-md shadow-xl border border-[#2b2e42] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
-            快捷键指引 · Shortcuts
+            {t('activityBar.shortcuts')}
           </div>
         </div>
 
@@ -281,12 +283,12 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
               <div>
                 <span className="font-semibold text-slate-100">{currentUser.nickname}</span>
                 <span className="text-[#8a91a8] ml-1.5 font-mono text-[11px]">
-                  ({currentUser.tier === 'pro' ? 'Pro 会员' : '免费用户'})
+                  ({currentUser.tier === 'pro' ? t('activityBar.proUser') : t('activityBar.freeUser')})
                 </span>
-                <div className="text-[10px] text-sky-400 mt-0.5">点击管理账号 / 退出登录</div>
+                <div className="text-[10px] text-sky-400 mt-0.5">{t('activityBar.accountManage')}</div>
               </div>
             ) : (
-              <span className="text-amber-400 font-medium">未登录 · 点击登录解锁云端功能与订阅</span>
+              <span className="text-amber-400 font-medium">{t('activityBar.loginPrompt')}</span>
             )}
           </div>
         </div>

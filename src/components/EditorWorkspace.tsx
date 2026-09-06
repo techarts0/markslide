@@ -33,17 +33,22 @@ import {
   FileText,
   ScrollText,
   Square,
+  Languages,
 } from 'lucide-react';
+import { useI18n } from '../i18n/I18nContext';
 import { THEME_OPTIONS } from '../themes';
 import { slideCompiler } from '../marpEngine';
 import { exportStandaloneHtml } from '../utils/exportHtml';
 import { parseSlides, getSlideIndexAtOffset } from '../utils/parseSlides';
 import { compressImageToDataUrl } from '../utils/imageCompress';
 import { SlideExplorer } from './SlideExplorer';
+import { SlideOutline } from './SlideOutline';
 import { AuthModal } from './AuthModal';
 import { ActivityBar, type ActivityTab } from './ActivityBar';
 import { ShortcutsModal } from './ShortcutsModal';
 import { SubscriptionModal } from './SubscriptionModal';
+import { CreateFolderModal } from './CreateFolderModal';
+import { moveSlide, deleteSlideByIndex, insertSlideAfter, type SlideOutlineItem } from '../utils/slideOutline';
 import type { ExplorerData, SlideDoc, AuthUser } from '../types/explorer';
 import { DEFAULT_EXPLORER_DATA } from '../types/explorer';
 import {
@@ -331,6 +336,7 @@ interface EditorWorkspaceProps {
 }
 
 export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresentation }) => {
+  const { t, locale, toggleLocale } = useI18n();
   const [markdown, setMarkdown] = useState<string>(SHOWCASE_MARKDOWN);
   const [renderedData, setRenderedData] = useState<{ html: string; css: string; count: number }>({
     html: '',
@@ -380,8 +386,15 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
   // 会员订阅 / 升级 Modal
   const [isSubscriptionOpen, setIsSubscriptionOpen] = useState(false);
 
-  // 严谨云端隔离原则：未登录时 ActivityBar 锁死，Slide Explorer 保持关闭
+  // 新建文件夹 Modal
+  const [createFolderState, setCreateFolderState] = useState<{
+    isOpen: boolean;
+    parentFolderId?: string;
+  }>({ isOpen: false });
+
+  // 严谨云端隔离原则：未登录时 ActivityBar 锁死，Slide Explorer / Outline 保持关闭
   const isExplorerOpen = !!currentUser && activeTab === 'explorer';
+  const isOutlineOpen = !!currentUser && activeTab === 'outline';
 
   // 快捷键速查浮窗
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
@@ -670,10 +683,15 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
     } catch { }
   };
 
-  // 新建文件夹
+  // 新建文件夹（唤起 Antigravity 质感模态弹窗）
   const handleCreateFolder = (parentFolderId?: string) => {
-    const name = window.prompt('请输入文件夹名称：', '新文件夹');
-    if (!name || !name.trim()) return;
+    setCreateFolderState({
+      isOpen: true,
+      parentFolderId,
+    });
+  };
+
+  const handleConfirmCreateFolder = (name: string) => {
     const newFolder = {
       id: `folder-${Date.now()}`,
       name: name.trim(),
@@ -681,11 +699,12 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
       folders: [],
       slides: [],
     };
-    const updated = addFolderToTree(explorerData, newFolder, parentFolderId);
+    const updated = addFolderToTree(explorerData, newFolder, createFolderState.parentFolderId);
     setExplorerData(updated);
     try {
       localStorage.setItem('hateppt_explorer', JSON.stringify(updated));
     } catch { }
+    setCreateFolderState({ isOpen: false });
   };
 
   // 删除幻灯片（同步移除已打开的 Tab 并切换）
@@ -746,6 +765,52 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
   const handleToggleFolder = (folderId: string) => {
     const updated = toggleFolderInTree(explorerData, folderId);
     setExplorerData(updated);
+  };
+
+  // 幻灯片大纲交互：点击直达跳转
+  const handleSelectOutlineSlide = (slide: SlideOutlineItem) => {
+    setActivePreviewIndex(slide.index);
+    setPreviewDirection('fade');
+
+    // 平滑滚动并聚焦 CodeMirror 编辑器至该页
+    const view = editorRef.current?.view;
+    if (view) {
+      const docLength = view.state.doc.length;
+      const targetOffset = Math.min(slide.startOffset, docLength);
+      view.dispatch({
+        selection: { anchor: targetOffset },
+        scrollIntoView: true,
+      });
+      view.focus();
+    }
+  };
+
+  // 幻灯片大纲交互：上下移动调整顺序
+  const handleMoveOutlineSlide = (fromIndex: number, toIndex: number) => {
+    const updated = moveSlide(markdown, fromIndex, toIndex);
+    setMarkdown(updated);
+    setActivePreviewIndex(toIndex);
+  };
+
+  // 幻灯片大纲交互：在下方插入新页
+  const handleInsertOutlineSlideAfter = (afterIndex: number) => {
+    const updated = insertSlideAfter(markdown, afterIndex);
+    setMarkdown(updated);
+    setActivePreviewIndex(afterIndex + 1);
+  };
+
+  // 幻灯片大纲交互：删除指定页
+  const handleDeleteOutlineSlide = (targetIndex: number) => {
+    const updated = deleteSlideByIndex(markdown, targetIndex);
+    setMarkdown(updated);
+    setActivePreviewIndex(Math.max(0, targetIndex - 1));
+  };
+
+  // 幻灯片大纲交互：在文档末尾追加新页
+  const handleAppendOutlineSlide = () => {
+    const updated = `${markdown.trimEnd()}\n\n---\n\n# 新幻灯片标题\n\n- 核心观点 1\n- 核心观点 2\n`;
+    setMarkdown(updated);
+    setActivePreviewIndex(slideCount);
   };
 
   // 防抖编译 Marp 渲染（200ms），打字无卡顿
@@ -999,10 +1064,20 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
 
           {/* 右侧动作按钮区：纯精美 ICON + 快捷操作 */}
           <div className="flex items-center gap-1.5 font-sans">
+            {/* 语言切换按钮 [ 中 / EN ] */}
+            <button
+              onClick={toggleLocale}
+              className="px-2 py-1 text-xs font-mono text-[#8a91a8] hover:text-sky-300 hover:bg-[#1f2235] border border-[#232536] rounded-lg transition-colors flex items-center gap-1.5 mr-1"
+              title={t('topbar.langToggle')}
+            >
+              <Languages size={14} className="text-sky-400" />
+              <span className="font-semibold text-[11px]">{locale === 'zh' ? 'EN' : '中'}</span>
+            </button>
+
             <button
               onClick={() => fileInputRef.current?.click()}
               className="p-2 text-[#8a91a8] hover:text-sky-400 hover:bg-[#1f2235] rounded-lg transition-colors group relative"
-              title="打开本地 .md 文件"
+              title={t('topbar.openMd')}
             >
               <FolderOpen size={16} />
             </button>
@@ -1010,7 +1085,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
             <button
               onClick={handleSaveMd}
               className="p-2 text-[#8a91a8] hover:text-sky-400 hover:bg-[#1f2235] rounded-lg transition-colors group relative"
-              title="保存为本地 .md 文件"
+              title={t('topbar.saveMd')}
             >
               <Save size={16} />
             </button>
@@ -1018,7 +1093,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
             <button
               onClick={handleExportHtml}
               className="p-2 text-[#8a91a8] hover:text-emerald-400 hover:bg-[#1f2235] rounded-lg transition-colors group relative"
-              title="导出自包含离线 HTML (双击直接放映)"
+              title={t('topbar.exportHtml')}
             >
               <Download size={16} />
             </button>
@@ -1026,7 +1101,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
             <button
               onClick={handlePrint}
               className="p-2 text-[#8a91a8] hover:text-sky-400 hover:bg-[#1f2235] rounded-lg transition-colors group relative"
-              title="打印 / 存为 PDF (16:9 矢量级导出)"
+              title={t('topbar.printPdf')}
             >
               <Printer size={16} />
             </button>
@@ -1037,7 +1112,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
             <button
               onClick={handleLaunch}
               className="p-2 text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg shadow-md shadow-sky-950/40 hover:scale-105 active:scale-95 transition-all"
-              title="进入放映模式 (F5)"
+              title={t('topbar.presentF5')}
             >
               <Play size={16} className="fill-current" />
             </button>
@@ -1071,6 +1146,20 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
             onRenameFolder={handleRenameFolder}
             onToggleFolder={handleToggleFolder}
           />
+
+          {/* 幻灯片大纲抽屉 (Slide Outline) */}
+          <SlideOutline
+            isOpen={isOutlineOpen}
+            onClose={() => handleTabChange(null)}
+            markdown={markdown}
+            activeSlideIndex={activePreviewIndex}
+            onSelectSlide={handleSelectOutlineSlide}
+            onMoveSlide={handleMoveOutlineSlide}
+            onInsertSlideAfter={handleInsertOutlineSlideAfter}
+            onDeleteSlide={handleDeleteOutlineSlide}
+            onAppendSlide={handleAppendOutlineSlide}
+          />
+
           {/* 中间编辑器 + 右侧预览的主分栏容器（支持鼠标拖拽调宽） */}
           <div ref={splitContainerRef} className="flex-1 min-w-0 flex h-full overflow-hidden relative">
             {/* 中间/主编辑器：支持基于 splitRatio 的动态宽度 */}
@@ -1094,7 +1183,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                           ? 'bg-[#181a28] text-slate-100 font-medium'
                           : 'bg-[#13141f] text-[#8a91a8] hover:text-slate-200 hover:bg-[#171927]'
                           }`}
-                        title={tabSlide?.title || '未命名演示文稿'}
+                        title={tabSlide?.title || t('editor.untitled')}
                       >
                         {isActive && (
                           <span className="absolute top-0 left-0 right-0 h-[2px] bg-sky-400 shadow-[0_1px_4px_rgba(56,189,248,0.5)]" />
@@ -1104,12 +1193,12 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                           className={`shrink-0 ${isActive ? 'text-sky-400' : 'text-[#717894] group-hover:text-[#9aa0b8]'}`}
                         />
                         <span className="truncate text-[12px] font-mono">
-                          {tabSlide?.title || '未命名.md'}
+                          {tabSlide?.title || t('editor.untitled')}
                         </span>
                         <button
                           onClick={(e) => handleCloseTab(tabId, e)}
                           className="p-0.5 rounded hover:bg-[#282c40] hover:text-slate-100 text-[#717894] opacity-0 group-hover:opacity-100 transition-all shrink-0 ml-0.5"
-                          title="关闭标签页"
+                          title={t('editor.closeTab')}
                         >
                           <X size={12} />
                         </button>
@@ -1123,7 +1212,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                   <button
                     onClick={() => handleCreateSlide()}
                     className="p-1.5 text-[#8a91a8] hover:text-sky-400 hover:bg-[#1f2235] rounded-md transition-colors"
-                    title="新建演示文稿"
+                    title={t('editor.newSlideDoc')}
                   >
                     <Plus size={14} />
                   </button>
@@ -1133,7 +1222,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       ? 'text-sky-400 bg-[#1e2236] border border-sky-500/30 shadow-sm'
                       : 'text-[#8a91a8] hover:text-slate-200 hover:bg-[#1f2235]'
                       }`}
-                    title={`展开 / 折叠实时渲染视口 (Ctrl+J 或 Ctrl+\\) [当前: ${isPreviewOpen ? '已展开' : '已折叠'}]`}
+                    title={t('editor.togglePreview')}
                   >
                     <PanelRight size={14} />
                   </button>
@@ -1146,7 +1235,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                   <button
                     onClick={() => insertSnippet('---\n\n# 新幻灯片标题\n\n- 核心观点 1\n- 核心观点 2')}
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入分页符 (---)"
+                    title={t('editor.insertSlideBreak')}
                   >
                     <Plus size={14} />
                   </button>
@@ -1158,7 +1247,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       )
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入对比三线表"
+                    title={t('editor.insertTable')}
                   >
                     <Table size={14} />
                   </button>
@@ -1166,7 +1255,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                   <button
                     onClick={() => imageInputRef.current?.click()}
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入本地图片（或在编辑器直接 Ctrl+V 粘贴截图）"
+                    title={t('editor.insertImage')}
                   >
                     <ImageIcon size={14} />
                   </button>
@@ -1180,7 +1269,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       )
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入双栏卡片"
+                    title={t('editor.insertCardGrid2')}
                   >
                     <Columns2 size={14} />
                   </button>
@@ -1192,7 +1281,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       )
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入三栏卡片 (.card-grid-3)"
+                    title={t('editor.insertCardGrid3')}
                   >
                     <LayoutGrid size={14} />
                   </button>
@@ -1204,7 +1293,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       )
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入 50/50 图文杂志级混排"
+                    title={t('editor.insertSplit50')}
                   >
                     <Columns size={14} />
                   </button>
@@ -1216,7 +1305,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       )
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入时间轴 / 步骤演进卡片"
+                    title={t('editor.insertSteps')}
                   >
                     <Milestone size={14} />
                   </button>
@@ -1228,7 +1317,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       )
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入核心大指标统计看板 (.stat-grid)"
+                    title={t('editor.insertStatGrid')}
                   >
                     <TrendingUp size={14} />
                   </button>
@@ -1240,7 +1329,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       )
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入嘉宾 / 人物介绍卡片"
+                    title={t('editor.insertProfile')}
                   >
                     <User size={14} />
                   </button>
@@ -1250,7 +1339,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       insertSnippet('> **核心法则**：\n> 保持简单，最小化状态，单一职责驱动。')
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入重点金句卡片"
+                    title={t('editor.insertQuote')}
                   >
                     <Quote size={14} />
                   </button>
@@ -1262,7 +1351,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       )
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入语义提示框 (Callout: Tip/Note/Warning/Caution)"
+                    title={t('editor.insertCallout')}
                   >
                     <MessageSquarePlus size={14} />
                   </button>
@@ -1274,7 +1363,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       )
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入前后对比面板 (Before vs After)"
+                    title={t('editor.insertCompare')}
                   >
                     <GitCompare size={14} />
                   </button>
@@ -1286,7 +1375,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       )
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入彩色徽章标签 (.badge)"
+                    title={t('editor.insertBadge')}
                   >
                     <Tag size={14} />
                   </button>
@@ -1300,7 +1389,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       )
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入 Mermaid 流程图"
+                    title={t('editor.insertMermaid')}
                   >
                     <GitGraph size={14} />
                   </button>
@@ -1310,7 +1399,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       insertSnippet('$$\\mathcal{L}_{total} = \\lambda_1 \\mathcal{L}_{cls} + \\lambda_2 \\mathcal{L}_{reg}$$')
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入 KaTeX 数学公式"
+                    title={t('editor.insertKatex')}
                   >
                     <Sigma size={14} />
                   </button>
@@ -1320,7 +1409,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                       insertSnippet('```typescript\n// 核心调度入口\nexport async function dispatch(event: Event) {\n  console.log("dispatching", event.id);\n}\n```')
                     }
                     className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
-                    title="插入代码块"
+                    title={t('editor.insertCodeBlock')}
                   >
                     <Code size={14} />
                   </button>
@@ -1330,12 +1419,12 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                 <div className="flex items-center gap-2.5 shrink-0 pl-2">
                   <div className="flex items-center gap-1.5 text-xs text-[#8a91a8] font-sans">
                     <Palette size={13} className="text-sky-400" />
-                    <span className="text-[#8a91a8] text-xs hidden sm:inline">主题:</span>
+                    <span className="text-[#8a91a8] text-xs hidden sm:inline">{t('editor.theme')}</span>
                     <select
                       value={currentTheme}
                       onChange={(e) => handleSelectTheme(e.target.value)}
                       className="bg-[#191c2b] text-slate-200 text-xs px-2 py-0.5 rounded-md border border-[#2a2e44] focus:outline-none focus:border-sky-500 cursor-pointer font-medium hover:bg-[#202438] transition-colors"
-                      title="切换当前 PPT 主题样式 (自动同步修改文档 Frontmatter)"
+                      title={t('editor.theme')}
                     >
                       {THEME_OPTIONS.map((theme) => (
                         <option key={theme.id} value={theme.id}>
@@ -1348,7 +1437,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                   <div className="h-3 w-px bg-[#232536]" />
 
                   <span className="text-[#636b85] font-mono text-[11px]">
-                    {markdown.length} 字符
+                    {markdown.length} {t('editor.charCount')}
                   </span>
                 </div>
               </div>
@@ -1402,7 +1491,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                 onDoubleClick={handleResetSplit}
                 className={`w-1.5 hover:w-2 bg-[#12131d] hover:bg-sky-500/80 active:bg-sky-400 border-x border-[#232536] cursor-col-resize select-none shrink-0 z-20 transition-all flex items-center justify-center group ${isDragging ? 'bg-sky-400 w-2' : ''
                   }`}
-                title="拖动调整左右分栏宽度（双击复位 50%）"
+                title={t('editor.splitDragTip')}
               >
                 <div className="w-[2px] h-6 bg-[#4e5572] group-hover:bg-white rounded-full transition-colors" />
               </div>
@@ -1418,9 +1507,9 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                 <div className="h-9 px-4 border-b border-[#232536] bg-[#141520] flex items-center justify-between text-xs text-[#8a91a8]">
                   <span className="text-[#8a91a8] font-mono text-[11px] flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
-                    16:9 实时视口 · {THEME_OPTIONS.find((t) => t.id === currentTheme)?.name}
+                    {t('preview.viewportTitle')}
                     {previewMode === 'continuous' && (
-                      <span className="text-[#636b85] text-[10px] ml-1">({slideCount} 页连续流)</span>
+                      <span className="text-[#636b85] text-[10px] ml-1">({slideCount} {t('preview.continuousStream')})</span>
                     )}
                   </span>
 
@@ -1429,17 +1518,17 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                     <button
                       onClick={togglePreviewMode}
                       className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#181a28] hover:bg-[#202336] border border-[#2a2e44] text-[#a2a9c4] hover:text-sky-300 transition-colors text-[11px] font-mono cursor-pointer"
-                      title={previewMode === 'continuous' ? '当前：连续长卷流（点击切换为单页聚焦）' : '当前：单页聚焦（点击切换为连续长卷流）'}
+                      title={previewMode === 'continuous' ? t('preview.modeStreamTip') : t('preview.modeSingleTip')}
                     >
                       {previewMode === 'continuous' ? (
                         <>
                           <ScrollText size={12} className="text-sky-400" />
-                          <span>长卷</span>
+                          <span>{t('preview.modeStream')}</span>
                         </>
                       ) : (
                         <>
                           <Square size={12} className="text-indigo-400" />
-                          <span>单页</span>
+                          <span>{t('preview.modeSingle')}</span>
                         </>
                       )}
                     </button>
@@ -1454,7 +1543,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                           }}
                           disabled={activePreviewIndex === 0}
                           className="p-0.5 hover:text-sky-400 disabled:opacity-20 transition-colors"
-                          title="上一页"
+                          title={t('preview.prevSlide')}
                         >
                           <ChevronLeft size={14} />
                         </button>
@@ -1468,7 +1557,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                           }}
                           disabled={activePreviewIndex === slideCount - 1}
                           className="p-0.5 hover:text-sky-400 disabled:opacity-20 transition-colors"
-                          title="下一页"
+                          title={t('preview.nextSlide')}
                         >
                           <ChevronRight size={14} />
                         </button>
@@ -1479,7 +1568,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
                     <button
                       onClick={togglePreview}
                       className="p-1 hover:text-slate-200 hover:bg-[#1f2235] rounded transition-colors text-[#717894]"
-                      title="收起实时渲染窗口 (Ctrl+J)"
+                      title={t('preview.collapsePreview')}
                     >
                       <X size={13} />
                     </button>
@@ -1587,6 +1676,13 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
         onUpgradeToPro={handleUpgradeToPro}
         onOpenAuth={() => setIsAuthModalOpen(true)}
         onLogout={handleLogout}
+      />
+
+      {/* 新建文件夹模态弹窗（Antigravity 质感替换系统原生 prompt） */}
+      <CreateFolderModal
+        isOpen={createFolderState.isOpen}
+        onClose={() => setCreateFolderState({ isOpen: false })}
+        onConfirm={handleConfirmCreateFolder}
       />
     </div>
   );
