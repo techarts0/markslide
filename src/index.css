@@ -8,10 +8,99 @@
     margin: 0;
     padding: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    background-color: #0f172a;
-    color: #f8fafc;
+    background-color: #11121c;
+    color: #e2e5f2;
     overflow: hidden;
   }
+}
+
+/* Antigravity IDE Soft Dark Slate Theme for CodeMirror */
+.cm-theme {
+  background-color: #181a28 !important;
+}
+.cm-editor {
+  background-color: #181a28 !important;
+  color: #dce0ee !important;
+  font-family: "JetBrains Mono", Consolas, Menlo, Monaco, monospace !important;
+}
+.cm-editor .cm-scroller {
+  font-family: inherit !important;
+  font-size: 13.5px !important;
+  line-height: 1.7 !important;
+}
+.cm-editor .cm-gutters {
+  background-color: #181a28 !important;
+  color: #555b76 !important;
+  border-right: 1px solid #232536 !important;
+}
+.cm-editor .cm-activeLine {
+  background-color: #1f2235 !important;
+}
+.cm-editor .cm-activeLineGutter {
+  background-color: #1f2235 !important;
+  color: #949ab8 !important;
+}
+.cm-editor .cm-selectionBackground,
+.cm-editor.cm-focused .cm-selectionBackground {
+  background-color: #2b314d !important;
+}
+.cm-editor .cm-cursor {
+  border-left-color: #38bdf8 !important;
+}
+
+/* Antigravity IDE 全局柔和深色滚动条 */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 154, 184, 0.22);
+  border-radius: 9999px;
+  transition: background-color 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 154, 184, 0.42);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox 滚动条适配 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 154, 184, 0.25) transparent;
+}
+
+/* 专门针对 CodeMirror 编辑器内部横向与纵向滚动条的高级质感定制 */
+.cm-editor .cm-scroller::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+.cm-editor .cm-scroller::-webkit-scrollbar-track {
+  background: #151724;
+}
+
+.cm-editor .cm-scroller::-webkit-scrollbar-thumb {
+  background: #2b2e46;
+  border-radius: 5px;
+  border: 2px solid #181a28;
+  transition: background-color 0.15s ease;
+}
+
+.cm-editor .cm-scroller::-webkit-scrollbar-thumb:hover {
+  background: #42476b;
+}
+
+.cm-editor .cm-scroller::-webkit-scrollbar-corner {
+  background: #181a28;
 }
 
 /* Marp Slide Container Helper */

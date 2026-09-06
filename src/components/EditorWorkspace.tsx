@@ -28,12 +28,35 @@ import {
   MessageSquarePlus,
   GitCompare,
   Tag,
+  PanelRight,
+  X,
+  FileText,
+  ScrollText,
+  Square,
 } from 'lucide-react';
 import { THEME_OPTIONS } from '../themes';
 import { slideCompiler } from '../marpEngine';
 import { exportStandaloneHtml } from '../utils/exportHtml';
 import { parseSlides, getSlideIndexAtOffset } from '../utils/parseSlides';
 import { compressImageToDataUrl } from '../utils/imageCompress';
+import { SlideExplorer } from './SlideExplorer';
+import { AuthModal } from './AuthModal';
+import { ActivityBar, type ActivityTab } from './ActivityBar';
+import { ShortcutsModal } from './ShortcutsModal';
+import { SubscriptionModal } from './SubscriptionModal';
+import type { ExplorerData, SlideDoc, AuthUser } from '../types/explorer';
+import { DEFAULT_EXPLORER_DATA } from '../types/explorer';
+import {
+  findSlideInTree,
+  updateSlideInTree,
+  addSlideToTree,
+  addFolderToTree,
+  deleteSlideFromTree,
+  deleteFolderFromTree,
+  renameSlideInTree,
+  renameFolderInTree,
+  toggleFolderInTree,
+} from '../utils/treeHelpers';
 
 const SHOWCASE_MARKDOWN = `---
 marp: true
@@ -324,6 +347,407 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
   const editorRef = useRef<ReactCodeMirrorRef | null>(null);
   const compileTimerRef = useRef<number | null>(null);
 
+  // 用户登录态管理
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    try {
+      const saved = localStorage.getItem('hateppt_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // 磨砂登录弹窗显隐（首次访问且未登录时自动弹窗；已点击过✕或已登录则默认关闭）
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(() => {
+    try {
+      const hasVisited = localStorage.getItem('hateppt_visited');
+      return !hasVisited;
+    } catch {
+      return false;
+    }
+  });
+
+  // 左侧 Activity Bar 当前激活的面板（默认展开文稿库 'explorer'，状态持久化）
+  const [activeTab, setActiveTab] = useState<ActivityTab>(() => {
+    try {
+      const saved = localStorage.getItem('hateppt_explorer_open');
+      return saved === 'false' ? null : 'explorer';
+    } catch {
+      return 'explorer';
+    }
+  });
+
+  // 会员订阅 / 升级 Modal
+  const [isSubscriptionOpen, setIsSubscriptionOpen] = useState(false);
+
+  // 严谨云端隔离原则：未登录时 ActivityBar 锁死，Slide Explorer 保持关闭
+  const isExplorerOpen = !!currentUser && activeTab === 'explorer';
+
+  // 快捷键速查浮窗
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+
+  // 右侧实时渲染窗口（默认展开，可折叠以进入全宽纯粹专注编辑模式，状态持久化）
+  const [isPreviewOpen, setIsPreviewOpen] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('hateppt_preview_open');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleExplorer = useCallback(() => {
+    if (!currentUser) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    setActiveTab((prev) => {
+      const next: ActivityTab = prev === 'explorer' ? null : 'explorer';
+      try {
+        localStorage.setItem('hateppt_explorer_open', next === 'explorer' ? 'true' : 'false');
+      } catch { }
+      return next;
+    });
+  }, [currentUser]);
+
+  const handleTabChange = useCallback((tab: ActivityTab) => {
+    if (!currentUser && tab !== null) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    setActiveTab(tab);
+    try {
+      localStorage.setItem('hateppt_explorer_open', tab === 'explorer' ? 'true' : 'false');
+    } catch { }
+  }, [currentUser]);
+
+  const handleUpgradeToPro = useCallback(() => {
+    if (!currentUser) return;
+    const updatedUser: AuthUser = { ...currentUser, tier: 'pro' };
+    setCurrentUser(updatedUser);
+    try {
+      localStorage.setItem('hateppt_user', JSON.stringify(updatedUser));
+    } catch { }
+  }, [currentUser]);
+
+  const handleLogout = useCallback(() => {
+    setCurrentUser(null);
+    setActiveTab(null);
+    try {
+      localStorage.removeItem('hateppt_user');
+      localStorage.setItem('hateppt_explorer_open', 'false');
+    } catch { }
+  }, []);
+
+  const togglePreview = useCallback(() => {
+    setIsPreviewOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('hateppt_preview_open', String(next));
+      } catch { }
+      return next;
+    });
+  }, []);
+
+  // 预览模式：'continuous' 连续长卷模式 | 'single' 单页聚焦模式（默认连续长卷，状态持久化）
+  const [previewMode, setPreviewMode] = useState<'continuous' | 'single'>(() => {
+    try {
+      const saved = localStorage.getItem('hateppt_preview_mode');
+      if (saved === 'single' || saved === 'continuous') return saved;
+    } catch { }
+    return 'continuous';
+  });
+
+  const slideRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  const togglePreviewMode = useCallback(() => {
+    setPreviewMode((prev) => {
+      const next = prev === 'continuous' ? 'single' : 'continuous';
+      try {
+        localStorage.setItem('hateppt_preview_mode', next);
+      } catch { }
+      return next;
+    });
+  }, []);
+
+  // 连续流模式下，编辑器光标跳转至某页时，平滑滚动至对应卡片
+  useEffect(() => {
+    if (previewMode === 'continuous' && isPreviewOpen) {
+      const target = slideRefs.current[activePreviewIndex];
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+  }, [activePreviewIndex, previewMode, isPreviewOpen]);
+
+  // 左右分栏拖拽比例（默认 0.5 均分，范围 0.2 ~ 0.8，本地持久化）
+  const [splitRatio, setSplitRatio] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('hateppt_split_ratio');
+      if (saved) {
+        const parsed = parseFloat(saved);
+        if (!isNaN(parsed) && parsed >= 0.2 && parsed <= 0.8) return parsed;
+      }
+    } catch { }
+    return 0.5;
+  });
+  const [isDragging, setIsDragging] = useState(false);
+  const splitContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      if (!splitContainerRef.current) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      const newRatio = (moveEvent.clientX - rect.left) / rect.width;
+      const clamped = Math.max(0.2, Math.min(0.8, newRatio));
+      setSplitRatio(clamped);
+    };
+
+    const onMouseUp = () => {
+      setIsDragging(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      setSplitRatio((current) => {
+        try {
+          localStorage.setItem('hateppt_split_ratio', String(current));
+        } catch { }
+        return current;
+      });
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }, []);
+
+  const handleResetSplit = useCallback(() => {
+    setSplitRatio(0.5);
+    try {
+      localStorage.setItem('hateppt_split_ratio', '0.5');
+    } catch { }
+  }, []);
+
+  // 文档树数据（从本地存储加载或使用精美预设树）
+  const [explorerData, setExplorerData] = useState<ExplorerData>(() => {
+    try {
+      const saved = localStorage.getItem('hateppt_explorer');
+      if (saved) return JSON.parse(saved);
+    } catch { }
+    const initial = JSON.parse(JSON.stringify(DEFAULT_EXPLORER_DATA));
+    if (initial.slides[0]) {
+      initial.slides[0].content = SHOWCASE_MARKDOWN;
+    }
+    return initial;
+  });
+
+  // 打开的 Tab 列表（记录 Slide ID，默认激活当前演示文稿，状态持久化）
+  const [openTabIds, setOpenTabIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('hateppt_open_tabs');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch { }
+    return ['slide-default-guide'];
+  });
+
+  // 当前正在编辑的文档 ID
+  const [activeSlideId, setActiveSlideId] = useState<string>('slide-default-guide');
+
+  // 当 markdown 变动时，实时防抖更新活动文档到树状数据与本地持久化
+  useEffect(() => {
+    setExplorerData((prev) => {
+      const updated = updateSlideInTree(prev, activeSlideId, markdown);
+      try {
+        localStorage.setItem('hateppt_explorer', JSON.stringify(updated));
+      } catch { }
+      return updated;
+    });
+  }, [markdown, activeSlideId]);
+
+  // 全局快捷键：Ctrl+B 切换文稿树，Ctrl+J 或 Ctrl+\ 切换实时渲染预览
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault();
+        toggleExplorer();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'j' || e.key === 'J' || e.key === '\\')) {
+        e.preventDefault();
+        togglePreview();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [toggleExplorer, togglePreview]);
+
+  // 文档选择与切换（双向联动 Tab）
+  const handleSelectSlide = (slide: SlideDoc) => {
+    setActiveSlideId(slide.id);
+    setMarkdown(slide.content);
+    setActivePreviewIndex(0);
+    setOpenTabIds((prev) => {
+      if (prev.includes(slide.id)) return prev;
+      const next = [...prev, slide.id];
+      try {
+        localStorage.setItem('hateppt_open_tabs', JSON.stringify(next));
+      } catch { }
+      return next;
+    });
+  };
+
+  // 点击 Tab 切换当前聚焦的演示文档
+  const handleSwitchTab = (tabId: string) => {
+    if (tabId === activeSlideId) return;
+    setActiveSlideId(tabId);
+    const targetSlide = findSlideInTree(explorerData, tabId);
+    if (targetSlide) {
+      setMarkdown(targetSlide.content);
+      setActivePreviewIndex(0);
+    }
+  };
+
+  // 关闭指定 Tab
+  const handleCloseTab = (tabId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const nextTabs = openTabIds.filter((id) => id !== tabId);
+    setOpenTabIds(nextTabs);
+    try {
+      localStorage.setItem('hateppt_open_tabs', JSON.stringify(nextTabs));
+    } catch { }
+
+    if (activeSlideId === tabId) {
+      if (nextTabs.length > 0) {
+        const closedIdx = openTabIds.indexOf(tabId);
+        const newActiveId = nextTabs[Math.max(0, closedIdx - 1)] || nextTabs[0];
+        setActiveSlideId(newActiveId);
+        const targetSlide = findSlideInTree(explorerData, newActiveId);
+        if (targetSlide) {
+          setMarkdown(targetSlide.content);
+          setActivePreviewIndex(0);
+        }
+      } else {
+        const fallback = explorerData.slides[0] || explorerData.folders[0]?.slides[0];
+        if (fallback) {
+          setOpenTabIds([fallback.id]);
+          setActiveSlideId(fallback.id);
+          setMarkdown(fallback.content);
+          setActivePreviewIndex(0);
+        }
+      }
+    }
+  };
+
+  // 新建幻灯片文稿（自动新增并激活对应 Tab）
+  const handleCreateSlide = (folderId?: string) => {
+    const newSlide: SlideDoc = {
+      id: `slide-${Date.now()}`,
+      title: `未命名演示-${new Date().toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}.md`,
+      content: `---\nmarp: true\ntheme: academic\npaginate: true\n---\n\n# 新演示文稿\n\n- 核心观点 1\n- 核心观点 2\n`,
+      theme: 'academic',
+      updatedAt: Date.now(),
+    };
+    const updated = addSlideToTree(explorerData, newSlide, folderId);
+    setExplorerData(updated);
+    setActiveSlideId(newSlide.id);
+    setMarkdown(newSlide.content);
+    setActivePreviewIndex(0);
+    setOpenTabIds((prev) => {
+      const next = [...prev, newSlide.id];
+      try {
+        localStorage.setItem('hateppt_open_tabs', JSON.stringify(next));
+      } catch { }
+      return next;
+    });
+    try {
+      localStorage.setItem('hateppt_explorer', JSON.stringify(updated));
+    } catch { }
+  };
+
+  // 新建文件夹
+  const handleCreateFolder = (parentFolderId?: string) => {
+    const name = window.prompt('请输入文件夹名称：', '新文件夹');
+    if (!name || !name.trim()) return;
+    const newFolder = {
+      id: `folder-${Date.now()}`,
+      name: name.trim(),
+      isOpen: true,
+      folders: [],
+      slides: [],
+    };
+    const updated = addFolderToTree(explorerData, newFolder, parentFolderId);
+    setExplorerData(updated);
+    try {
+      localStorage.setItem('hateppt_explorer', JSON.stringify(updated));
+    } catch { }
+  };
+
+  // 删除幻灯片（同步移除已打开的 Tab 并切换）
+  const handleDeleteSlide = (slideId: string) => {
+    const updated = deleteSlideFromTree(explorerData, slideId);
+    setExplorerData(updated);
+    const nextTabs = openTabIds.filter((id) => id !== slideId);
+    setOpenTabIds(nextTabs);
+    try {
+      localStorage.setItem('hateppt_open_tabs', JSON.stringify(nextTabs));
+    } catch { }
+
+    if (activeSlideId === slideId) {
+      const newActiveId = nextTabs[0] || updated.slides[0]?.id || updated.folders[0]?.slides[0]?.id;
+      if (newActiveId) {
+        setActiveSlideId(newActiveId);
+        const target = findSlideInTree(updated, newActiveId);
+        if (target) {
+          setMarkdown(target.content);
+          setActivePreviewIndex(0);
+        }
+        if (!nextTabs.includes(newActiveId)) {
+          setOpenTabIds([newActiveId]);
+        }
+      }
+    }
+    try {
+      localStorage.setItem('hateppt_explorer', JSON.stringify(updated));
+    } catch { }
+  };
+
+  // 删除文件夹
+  const handleDeleteFolder = (folderId: string) => {
+    const updated = deleteFolderFromTree(explorerData, folderId);
+    setExplorerData(updated);
+    try {
+      localStorage.setItem('hateppt_explorer', JSON.stringify(updated));
+    } catch { }
+  };
+
+  // 重命名
+  const handleRenameSlide = (slideId: string, newTitle: string) => {
+    const updated = renameSlideInTree(explorerData, slideId, newTitle);
+    setExplorerData(updated);
+    try {
+      localStorage.setItem('hateppt_explorer', JSON.stringify(updated));
+    } catch { }
+  };
+
+  const handleRenameFolder = (folderId: string, newName: string) => {
+    const updated = renameFolderInTree(explorerData, folderId, newName);
+    setExplorerData(updated);
+    try {
+      localStorage.setItem('hateppt_explorer', JSON.stringify(updated));
+    } catch { }
+  };
+
+  const handleToggleFolder = (folderId: string) => {
+    const updated = toggleFolderInTree(explorerData, folderId);
+    setExplorerData(updated);
+  };
+
   // 防抖编译 Marp 渲染（200ms），打字无卡顿
   useEffect(() => {
     if (compileTimerRef.current) clearTimeout(compileTimerRef.current);
@@ -361,12 +785,12 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
     return opt ? opt.isDark : false;
   }, [currentTheme]);
 
-  // 仅在当前单页渲染 Mermaid 矢量图，并与主题暗亮色联动
+  // 渲染 Mermaid 矢量图，并与主题暗亮色及预览模式联动
   useEffect(() => {
-    if (previewBoxRef.current) {
+    if (isPreviewOpen && previewBoxRef.current) {
       slideCompiler.renderMermaidElements(previewBoxRef.current, isDarkTheme);
     }
-  }, [activePreviewIndex, renderedData.html, isDarkTheme]);
+  }, [isPreviewOpen, previewMode, activePreviewIndex, renderedData.html, isDarkTheme]);
 
   // 切换主题：直接替换或注入 theme: xxx，保留全部正文内容
   const handleSelectTheme = (newTheme: string) => {
@@ -561,35 +985,15 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
           className="hidden"
         />
 
-        {/* 顶部极客极简导航栏 */}
-        <header className="h-12 px-4 border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-md flex items-center justify-between shrink-0 z-20">
-          {/* 左侧 Logo 与 Theme 选择器 */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 text-cyan-400">
-              <Terminal size={17} className="text-cyan-400" />
+        {/* 顶部极客极简导航栏 (Antigravity 柔和深灰蓝稳重质感) */}
+        <header className="h-12 px-4 border-b border-[#232536] bg-[#141520] backdrop-blur-md flex items-center justify-between shrink-0 z-20">
+          {/* 左侧 Logo */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 text-sky-400">
+              <Terminal size={17} className="text-sky-400" />
               <span className="font-bold text-sm tracking-wider text-slate-100 font-sans">
-                HATE PPT<span className="text-cyan-400 font-mono text-xs ml-1 font-normal"> Markdown to Slide </span>
+                HATE PPT<span className="text-sky-400 font-mono text-xs ml-1 font-normal"> Markdown to Presentation </span>
               </span>
-            </div>
-
-            <div className="h-4 w-px bg-slate-800" />
-
-            {/* Theme 主题快速切换 */}
-            <div className="flex items-center gap-1.5 text-xs text-slate-400 font-sans">
-              <Palette size={14} className="text-cyan-400" />
-              <span className="text-slate-400 text-xs">主题:</span>
-              <select
-                value={currentTheme}
-                onChange={(e) => handleSelectTheme(e.target.value)}
-                className="bg-slate-800/90 text-slate-200 text-xs px-2.5 py-1 rounded-lg border border-slate-700/70 focus:outline-none focus:border-cyan-500 cursor-pointer font-medium hover:bg-slate-700/80 transition-colors"
-                title="切换 PPT 主题样式"
-              >
-                {THEME_OPTIONS.map((theme) => (
-                  <option key={theme.id} value={theme.id}>
-                    {theme.name}
-                  </option>
-                ))}
-              </select>
             </div>
           </div>
 
@@ -597,7 +1001,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
           <div className="flex items-center gap-1.5 font-sans">
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="p-2 text-slate-400 hover:text-cyan-400 hover:bg-slate-800/80 rounded-lg transition-colors group relative"
+              className="p-2 text-[#8a91a8] hover:text-sky-400 hover:bg-[#1f2235] rounded-lg transition-colors group relative"
               title="打开本地 .md 文件"
             >
               <FolderOpen size={16} />
@@ -605,7 +1009,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
 
             <button
               onClick={handleSaveMd}
-              className="p-2 text-slate-400 hover:text-cyan-400 hover:bg-slate-800/80 rounded-lg transition-colors group relative"
+              className="p-2 text-[#8a91a8] hover:text-sky-400 hover:bg-[#1f2235] rounded-lg transition-colors group relative"
               title="保存为本地 .md 文件"
             >
               <Save size={16} />
@@ -613,7 +1017,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
 
             <button
               onClick={handleExportHtml}
-              className="p-2 text-slate-400 hover:text-emerald-400 hover:bg-slate-800/80 rounded-lg transition-colors group relative"
+              className="p-2 text-[#8a91a8] hover:text-emerald-400 hover:bg-[#1f2235] rounded-lg transition-colors group relative"
               title="导出自包含离线 HTML (双击直接放映)"
             >
               <Download size={16} />
@@ -621,18 +1025,18 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
 
             <button
               onClick={handlePrint}
-              className="p-2 text-slate-400 hover:text-sky-400 hover:bg-slate-800/80 rounded-lg transition-colors group relative"
+              className="p-2 text-[#8a91a8] hover:text-sky-400 hover:bg-[#1f2235] rounded-lg transition-colors group relative"
               title="打印 / 存为 PDF (16:9 矢量级导出)"
             >
               <Printer size={16} />
             </button>
 
-            <div className="h-4 w-px bg-slate-800 mx-1" />
+            <div className="h-4 w-px bg-[#232536] mx-1" />
 
             {/* 纯三角放映 ICON 按钮 */}
             <button
               onClick={handleLaunch}
-              className="p-2 text-slate-900 bg-cyan-400 hover:bg-cyan-300 rounded-lg shadow-md shadow-cyan-950/40 hover:scale-105 active:scale-95 transition-all"
+              className="p-2 text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg shadow-md shadow-sky-950/40 hover:scale-105 active:scale-95 transition-all"
               title="进入放映模式 (F5)"
             >
               <Play size={16} className="fill-current" />
@@ -640,307 +1044,550 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
           </div>
         </header>
 
-        {/* 主体分栏：左侧极客 MD 编辑区，右侧单页 16:9 高性能渲染预览 */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* 左侧编辑器 */}
-          <div className="w-1/2 border-r border-slate-800/80 flex flex-col bg-[#0b0f19]">
-            {/* 编辑器快捷组件工具条：纯精美 ICON + 悬浮 Tips */}
-            <div className="h-9 px-3 border-b border-slate-800/60 bg-slate-900/50 flex items-center justify-between text-xs text-slate-400 select-none overflow-x-auto no-scrollbar font-sans">
-              <div className="flex items-center gap-0.5">
-                <button
-                  onClick={() => insertSnippet('---\n\n# 新幻灯片标题\n\n- 核心观点 1\n- 核心观点 2')}
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入分页符 (---)"
-                >
-                  <Plus size={14} />
-                </button>
+        {/* 主体分栏：最左侧 Activity Bar + Slide Explorer 抽屉 + 中间极客 MD 编辑区 + 右侧单页 16:9 高性能渲染预览 */}
+        <div className="flex-1 flex overflow-hidden relative">
+          {/* 最左侧极客垂直菜单栏 (Activity Bar，类似 Antigravity / VS Code，承载全部云端与订阅功能) */}
+          <ActivityBar
+            activeTab={activeTab}
+            onTabChange={handleTabChange}
+            currentUser={currentUser}
+            onOpenAuth={() => setIsAuthModalOpen(true)}
+            onOpenShortcuts={() => setIsShortcutsOpen(true)}
+            onOpenSubscription={() => setIsSubscriptionOpen(true)}
+          />
 
-                <button
-                  onClick={() =>
-                    insertSnippet(
-                      '| 方案对比 | 基础标准版 | 企业私有化旗舰版 |\n| :--- | :--- | :--- |\n| 响应时延 | 毫秒级云端调度 (< 50ms) | 内网专属集群直连 (< 5ms) |\n| 数据隐私 | 传输层全程加密 | 数据 100% 物理不出内网 |\n| 专家支持 | 5x8 标准工单保障 | 7x24 专属技术总监直通车 |'
-                    )
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入对比三线表"
-                >
-                  <Table size={14} />
-                </button>
-
-                <button
-                  onClick={() => imageInputRef.current?.click()}
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入本地图片（或在编辑器直接 Ctrl+V 粘贴截图）"
-                >
-                  <ImageIcon size={14} />
-                </button>
-
-                <div className="h-3.5 w-px bg-slate-800 mx-1" />
-
-                <button
-                  onClick={() =>
-                    insertSnippet(
-                      '<div class="card-grid">\n  <div class="card">\n    <h3>左侧板块</h3>\n    <p>关键内容与推导说明</p>\n  </div>\n  <div class="card">\n    <h3>右侧板块</h3>\n    <p>关键数据与配套举证</p>\n  </div>\n</div>'
-                    )
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入双栏卡片"
-                >
-                  <Columns2 size={14} />
-                </button>
-
-                <button
-                  onClick={() =>
-                    insertSnippet(
-                      '<div class="card-grid-3">\n  <div class="card">\n    <h3>01. 洞察</h3>\n    <p>深度洞察业务与场景痛点</p>\n  </div>\n  <div class="card">\n    <h3>02. 架构</h3>\n    <p>端到端高可用系统方案</p>\n  </div>\n  <div class="card">\n    <h3>03. 落地</h3>\n    <p>规模化交付与效能提升</p>\n  </div>\n</div>'
-                    )
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入三栏卡片 (.card-grid-3)"
-                >
-                  <LayoutGrid size={14} />
-                </button>
-
-                <button
-                  onClick={() =>
-                    insertSnippet(
-                      '<div class="split">\n  <div>\n    <h2>核心突破与成果</h2>\n    <p>经过多轮迭代与端到端优化，系统在复杂高并发场景下达成突破性表现：</p>\n    <ul>\n      <li><strong>时延压缩</strong>：P99 响应降低 64%</li>\n      <li><strong>可用性</strong>：实现 99.99% 持续稳定运行</li>\n    </ul>\n  </div>\n  <img src="https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=1200&q=80" alt="成果图" />\n</div>'
-                    )
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入 50/50 图文杂志级混排"
-                >
-                  <Columns size={14} />
-                </button>
-
-                <button
-                  onClick={() =>
-                    insertSnippet(
-                      '<div class="steps">\n  <div class="step">\n    <div class="step-num">1</div>\n    <h3>方案预研</h3>\n    <p>需求对齐与技术预研验证</p>\n  </div>\n  <div class="step">\n    <div class="step-num">2</div>\n    <h3>架构研发</h3>\n    <p>核心算法调度与引擎重构</p>\n  </div>\n  <div class="step">\n    <div class="step-num">3</div>\n    <h3>灰度发布</h3>\n    <p>小流量验证与性能追踪</p>\n  </div>\n  <div class="step">\n    <div class="step-num">4</div>\n    <h3>全面落地</h3>\n    <p>规模化上线与资产沉淀</p>\n  </div>\n</div>'
-                    )
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入时间轴 / 步骤演进卡片"
-                >
-                  <Milestone size={14} />
-                </button>
-
-                <button
-                  onClick={() =>
-                    insertSnippet(
-                      '<div class="stat-grid">\n  <div class="stat-card">\n    <div class="stat-value">99.9%</div>\n    <div class="stat-label">系统可用性 (SLA)</div>\n    <div class="stat-desc"><span class="stat-badge">+0.8%</span> 跨区灾备高可用</div>\n  </div>\n  <div class="stat-card">\n    <div class="stat-value">4.2x</div>\n    <div class="stat-label">端到端吞吐提升</div>\n    <div class="stat-desc"><span class="stat-badge">突破</span> 零拷贝架构</div>\n  </div>\n  <div class="stat-card">\n    <div class="stat-value">0ms</div>\n    <div class="stat-label">专网网络抖动</div>\n    <div class="stat-desc"><span class="stat-badge">专线</span> 物理光纤直连</div>\n  </div>\n</div>'
-                    )
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入核心大指标统计看板 (.stat-grid)"
-                >
-                  <TrendingUp size={14} />
-                </button>
-
-                <button
-                  onClick={() =>
-                    insertSnippet(
-                      '<div class="profile">\n  <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80" alt="头像" />\n  <div class="profile-info">\n    <h3>张博士 / 首席科学家</h3>\n    <div class="title">ASDF实验室主任 · 博士生导师</div>\n    <p>著名高能物理学家，曾获搞笑诺贝尔奖。</p>\n  </div>\n</div>'
-                    )
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入嘉宾 / 人物介绍卡片"
-                >
-                  <User size={14} />
-                </button>
-
-                <button
-                  onClick={() =>
-                    insertSnippet('> **核心法则**：\n> 保持简单，最小化状态，单一职责驱动。')
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入重点金句卡片"
-                >
-                  <Quote size={14} />
-                </button>
-
-                <button
-                  onClick={() =>
-                    insertSnippet(
-                      '<div class="callout callout-tip">\n  <div class="callout-title">💡 关键创新要点</div>\n  <p>结构化内容配合高精度排版组件，专注思考本质，带来出版级视觉质感。</p>\n</div>'
-                    )
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入语义提示框 (Callout: Tip/Note/Warning/Caution)"
-                >
-                  <MessageSquarePlus size={14} />
-                </button>
-
-                <button
-                  onClick={() =>
-                    insertSnippet(
-                      '<div class="compare">\n  <div class="compare-before">\n    <h3>❌ 传统做法与痛点</h3>\n    <ul>\n      <li>机械拖拽耗费数小时</li>\n      <li>排版错乱、字体错位</li>\n    </ul>\n  </div>\n  <div class="compare-after">\n    <h3>✅ MarkSlide 现代方案</h3>\n    <ul>\n      <li>纯文本秒级出版级排版</li>\n      <li>单文件 HTML 零依赖分发</li>\n    </ul>\n  </div>\n</div>'
-                    )
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入前后对比面板 (Before vs After)"
-                >
-                  <GitCompare size={14} />
-                </button>
-
-                <button
-                  onClick={() =>
-                    insertSnippet(
-                      '<span class="badge badge-success">稳定就绪</span> <span class="badge badge-info">v2.0 升级</span> <span class="badge badge-warning">注意</span>'
-                    )
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入彩色徽章标签 (.badge)"
-                >
-                  <Tag size={14} />
-                </button>
-
-                <div className="h-3.5 w-px bg-slate-800 mx-1" />
-
-                <button
-                  onClick={() =>
-                    insertSnippet(
-                      '```mermaid\nflowchart LR\n    Start([用户请求]) --> Process[分布式网关]\n    Process --> DB[(数据库持久化)]\n    DB --> Return([毫秒返回])\n```'
-                    )
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入 Mermaid 流程图"
-                >
-                  <GitGraph size={14} />
-                </button>
-
-                <button
-                  onClick={() =>
-                    insertSnippet('$$\\mathcal{L}_{total} = \\lambda_1 \\mathcal{L}_{cls} + \\lambda_2 \\mathcal{L}_{reg}$$')
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入 KaTeX 数学公式"
-                >
-                  <Sigma size={14} />
-                </button>
-
-                <button
-                  onClick={() =>
-                    insertSnippet('```typescript\n// 核心调度入口\nexport async function dispatch(event: Event) {\n  console.log("dispatching", event.id);\n}\n```')
-                  }
-                  className="p-1.5 hover:text-cyan-400 hover:bg-slate-800/80 rounded-md transition-colors text-slate-400"
-                  title="插入代码块"
-                >
-                  <Code size={14} />
-                </button>
-              </div>
-
-              <div className="text-slate-500 font-mono text-[11px] shrink-0 pl-2">
-                {markdown.length} 字符
-              </div>
-            </div>
-
-            {/* CodeMirror 6 极客 Markdown 编辑区（支持 Ctrl+V 粘贴截图与拖拽图片） */}
+          {/* 左侧层级文稿管理器 */}
+          <SlideExplorer
+            isOpen={isExplorerOpen}
+            onClose={() => handleTabChange(null)}
+            data={explorerData}
+            activeSlideId={activeSlideId}
+            onSelectSlide={handleSelectSlide}
+            onCreateSlide={handleCreateSlide}
+            onCreateFolder={handleCreateFolder}
+            onDeleteSlide={handleDeleteSlide}
+            onDeleteFolder={handleDeleteFolder}
+            onRenameSlide={handleRenameSlide}
+            onRenameFolder={handleRenameFolder}
+            onToggleFolder={handleToggleFolder}
+          />
+          {/* 中间编辑器 + 右侧预览的主分栏容器（支持鼠标拖拽调宽） */}
+          <div ref={splitContainerRef} className="flex-1 min-w-0 flex h-full overflow-hidden relative">
+            {/* 中间/主编辑器：支持基于 splitRatio 的动态宽度 */}
             <div
-              onPaste={handlePaste}
-              onDrop={handleDrop}
-              className="flex-1 overflow-hidden relative font-mono text-xs"
+              style={isPreviewOpen ? { width: `${splitRatio * 100}%` } : undefined}
+              className={`${isPreviewOpen ? 'shrink-0' : 'flex-1 w-full'} min-w-[280px] flex flex-col bg-[#181a28] relative ${isDragging ? 'pointer-events-none' : ''
+                }`}
             >
-              <CodeMirror
-                ref={editorRef}
-                value={markdown}
-                height="100%"
-                theme={oneDark}
-                extensions={[langMarkdown()]}
-                onChange={(val) => setMarkdown(val)}
-                onUpdate={(viewUpdate) => {
-                  if (viewUpdate.selectionSet) {
-                    const pos = viewUpdate.state.selection.main.head;
-                    const targetSlide = getSlideIndexAtOffset(viewUpdate.state.doc.toString(), pos);
-                    setActivePreviewIndex((prev) => {
-                      const clamped = Math.max(0, Math.min(targetSlide, slideCount - 1));
-                      if (prev !== clamped) {
-                        setPreviewDirection('fade');
-                        return clamped;
-                      }
-                      return prev;
-                    });
-                  }
-                }}
-                className="h-full text-xs [&_.cm-scroller]:overflow-auto [&_.cm-editor]:h-full [&_.cm-gutters]:bg-[#0c101d] [&_.cm-gutters]:border-r [&_.cm-gutters]:border-slate-800/80 [&_.cm-activeLineGutter]:bg-slate-800/60"
-                basicSetup={{
-                  lineNumbers: true,
-                  highlightActiveLineGutter: true,
-                  history: true,
-                  bracketMatching: true,
-                  closeBrackets: true,
-                  autocompletion: true,
-                  highlightActiveLine: true,
-                  foldGutter: true,
-                }}
-              />
-            </div>
-          </div>
+              {/* 多文件标签栏 (VS Code / Antigravity 经典 Tab Bar) */}
+              <div className="h-9 bg-[#13141f] border-b border-[#232536] flex items-center justify-between select-none overflow-hidden font-sans text-xs">
+                {/* 标签列表区 */}
+                <div className="flex items-center h-full overflow-x-auto no-scrollbar flex-1 min-w-0">
+                  {openTabIds.map((tabId) => {
+                    const tabSlide = findSlideInTree(explorerData, tabId);
+                    const isActive = tabId === activeSlideId;
+                    return (
+                      <div
+                        key={tabId}
+                        onClick={() => handleSwitchTab(tabId)}
+                        className={`group flex items-center gap-2 h-full px-3.5 border-r border-[#232536] cursor-pointer transition-all max-w-[210px] shrink-0 relative ${isActive
+                          ? 'bg-[#181a28] text-slate-100 font-medium'
+                          : 'bg-[#13141f] text-[#8a91a8] hover:text-slate-200 hover:bg-[#171927]'
+                          }`}
+                        title={tabSlide?.title || '未命名演示文稿'}
+                      >
+                        {isActive && (
+                          <span className="absolute top-0 left-0 right-0 h-[2px] bg-sky-400 shadow-[0_1px_4px_rgba(56,189,248,0.5)]" />
+                        )}
+                        <FileText
+                          size={13}
+                          className={`shrink-0 ${isActive ? 'text-sky-400' : 'text-[#717894] group-hover:text-[#9aa0b8]'}`}
+                        />
+                        <span className="truncate text-[12px] font-mono">
+                          {tabSlide?.title || '未命名.md'}
+                        </span>
+                        <button
+                          onClick={(e) => handleCloseTab(tabId, e)}
+                          className="p-0.5 rounded hover:bg-[#282c40] hover:text-slate-100 text-[#717894] opacity-0 group-hover:opacity-100 transition-all shrink-0 ml-0.5"
+                          title="关闭标签页"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
 
-          {/* 右侧高性能单页 16:9 实时预览窗 */}
-          <div className="w-1/2 flex flex-col bg-[#06090f] select-none font-sans">
-            {/* 预览窗顶部状态条 */}
-            <div className="h-9 px-4 border-b border-slate-800/60 bg-slate-900/40 flex items-center justify-between text-xs text-slate-400">
-              <span className="text-slate-400 font-mono text-[11px] flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-                16:9 实时视口 · {THEME_OPTIONS.find((t) => t.id === currentTheme)?.name}
-              </span>
-
-              {/* 极简翻页胶囊 */}
-              <div className="flex items-center gap-2 bg-slate-800/80 px-2.5 py-0.5 rounded-full border border-slate-700/60">
-                <button
-                  onClick={() => {
-                    setPreviewDirection('prev');
-                    setActivePreviewIndex((p: number) => Math.max(0, p - 1));
-                  }}
-                  disabled={activePreviewIndex === 0}
-                  className="p-0.5 hover:text-cyan-400 disabled:opacity-20 transition-colors"
-                  title="上一页"
-                >
-                  <ChevronLeft size={14} />
-                </button>
-                <span className="font-mono text-[11px] text-slate-200 font-semibold px-1">
-                  {activePreviewIndex + 1} / {slideCount}
-                </span>
-                <button
-                  onClick={() => {
-                    setPreviewDirection('next');
-                    setActivePreviewIndex((p: number) => Math.min(slideCount - 1, p + 1));
-                  }}
-                  disabled={activePreviewIndex === slideCount - 1}
-                  className="p-0.5 hover:text-cyan-400 disabled:opacity-20 transition-colors"
-                  title="下一页"
-                >
-                  <ChevronRight size={14} />
-                </button>
+                {/* Tab Bar 右侧伴侣快捷按钮：新建演示文稿与实时渲染视口折叠/展开 */}
+                <div className="flex items-center gap-1 px-2 shrink-0 bg-[#13141f] border-l border-[#232536] h-full">
+                  <button
+                    onClick={() => handleCreateSlide()}
+                    className="p-1.5 text-[#8a91a8] hover:text-sky-400 hover:bg-[#1f2235] rounded-md transition-colors"
+                    title="新建演示文稿"
+                  >
+                    <Plus size={14} />
+                  </button>
+                  <button
+                    onClick={togglePreview}
+                    className={`p-1.5 rounded-md transition-all ${isPreviewOpen
+                      ? 'text-sky-400 bg-[#1e2236] border border-sky-500/30 shadow-sm'
+                      : 'text-[#8a91a8] hover:text-slate-200 hover:bg-[#1f2235]'
+                      }`}
+                    title={`展开 / 折叠实时渲染视口 (Ctrl+J 或 Ctrl+\\) [当前: ${isPreviewOpen ? '已展开' : '已折叠'}]`}
+                  >
+                    <PanelRight size={14} />
+                  </button>
+                </div>
               </div>
-            </div>
 
-            {/* 预览窗单页居中展示（完整支持 Marp 样式与背景，带平滑过渡） */}
-            <div
-              ref={previewBoxRef}
-              className="flex-1 flex items-center justify-center p-6 overflow-hidden"
-            >
-              <div className="w-full max-w-[760px] aspect-[16/9] rounded-xl shadow-2xl overflow-hidden border border-slate-800 transition-all flex items-center justify-center relative bg-transparent">
-                <div
-                  key={activePreviewIndex}
-                  className={`w-full h-full ${previewDirection === 'next'
-                    ? 'animate-slide-next'
-                    : previewDirection === 'prev'
-                      ? 'animate-slide-prev'
-                      : 'animate-slide-in'
-                    } flex items-center justify-center [&>div.marpit]:w-full [&>div.marpit]:h-full [&_svg[data-marpit-svg]]:w-full [&_svg[data-marpit-svg]]:h-full`}
-                  dangerouslySetInnerHTML={{
-                    __html:
-                      parsedSlides[activePreviewIndex] ||
-                      '<div class="marpit"><section><h1>暂无内容</h1></section></div>',
+              {/* 编辑器快捷组件工具条：纯精美 ICON + 悬浮 Tips */}
+              <div className="h-9 px-3 border-b border-[#232536] bg-[#141624] flex items-center justify-between text-xs text-[#8a91a8] select-none overflow-x-auto no-scrollbar font-sans">
+                <div className="flex items-center gap-0.5">
+                  <button
+                    onClick={() => insertSnippet('---\n\n# 新幻灯片标题\n\n- 核心观点 1\n- 核心观点 2')}
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入分页符 (---)"
+                  >
+                    <Plus size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet(
+                        '| 方案对比 | 基础标准版 | 企业私有化旗舰版 |\n| :--- | :--- | :--- |\n| 响应时延 | 毫秒级云端调度 (< 50ms) | 内网专属集群直连 (< 5ms) |\n| 数据隐私 | 传输层全程加密 | 数据 100% 物理不出内网 |\n| 专家支持 | 5x8 标准工单保障 | 7x24 专属技术总监直通车 |'
+                      )
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入对比三线表"
+                  >
+                    <Table size={14} />
+                  </button>
+
+                  <button
+                    onClick={() => imageInputRef.current?.click()}
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入本地图片（或在编辑器直接 Ctrl+V 粘贴截图）"
+                  >
+                    <ImageIcon size={14} />
+                  </button>
+
+                  <div className="h-3.5 w-px bg-[#232536] mx-1" />
+
+                  <button
+                    onClick={() =>
+                      insertSnippet(
+                        '<div class="card-grid">\n  <div class="card">\n    <h3>左侧板块</h3>\n    <p>关键内容与推导说明</p>\n  </div>\n  <div class="card">\n    <h3>右侧板块</h3>\n    <p>关键数据与配套举证</p>\n  </div>\n</div>'
+                      )
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入双栏卡片"
+                  >
+                    <Columns2 size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet(
+                        '<div class="card-grid-3">\n  <div class="card">\n    <h3>01. 洞察</h3>\n    <p>深度洞察业务与场景痛点</p>\n  </div>\n  <div class="card">\n    <h3>02. 架构</h3>\n    <p>端到端高可用系统方案</p>\n  </div>\n  <div class="card">\n    <h3>03. 落地</h3>\n    <p>规模化交付与效能提升</p>\n  </div>\n</div>'
+                      )
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入三栏卡片 (.card-grid-3)"
+                  >
+                    <LayoutGrid size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet(
+                        '<div class="split">\n  <div>\n    <h2>核心突破与成果</h2>\n    <p>经过多轮迭代与端到端优化，系统在复杂高并发场景下达成突破性表现：</p>\n    <ul>\n      <li><strong>时延压缩</strong>：P99 响应降低 64%</li>\n      <li><strong>可用性</strong>：实现 99.99% 持续稳定运行</li>\n    </ul>\n  </div>\n  <img src="https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=1200&q=80" alt="成果图" />\n</div>'
+                      )
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入 50/50 图文杂志级混排"
+                  >
+                    <Columns size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet(
+                        '<div class="steps">\n  <div class="step">\n    <div class="step-num">1</div>\n    <h3>方案预研</h3>\n    <p>需求对齐与技术预研验证</p>\n  </div>\n  <div class="step">\n    <div class="step-num">2</div>\n    <h3>架构研发</h3>\n    <p>核心算法调度与引擎重构</p>\n  </div>\n  <div class="step">\n    <div class="step-num">3</div>\n    <h3>灰度发布</h3>\n    <p>小流量验证与性能追踪</p>\n  </div>\n  <div class="step">\n    <div class="step-num">4</div>\n    <h3>全面落地</h3>\n    <p>规模化上线与资产沉淀</p>\n  </div>\n</div>'
+                      )
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入时间轴 / 步骤演进卡片"
+                  >
+                    <Milestone size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet(
+                        '<div class="stat-grid">\n  <div class="stat-card">\n    <div class="stat-value">99.9%</div>\n    <div class="stat-label">系统可用性 (SLA)</div>\n    <div class="stat-desc"><span class="stat-badge">+0.8%</span> 跨区灾备高可用</div>\n  </div>\n  <div class="stat-card">\n    <div class="stat-value">4.2x</div>\n    <div class="stat-label">端到端吞吐提升</div>\n    <div class="stat-desc"><span class="stat-badge">突破</span> 零拷贝架构</div>\n  </div>\n  <div class="stat-card">\n    <div class="stat-value">0ms</div>\n    <div class="stat-label">专网网络抖动</div>\n    <div class="stat-desc"><span class="stat-badge">专线</span> 物理光纤直连</div>\n  </div>\n</div>'
+                      )
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入核心大指标统计看板 (.stat-grid)"
+                  >
+                    <TrendingUp size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet(
+                        '<div class="profile">\n  <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80" alt="头像" />\n  <div class="profile-info">\n    <h3>张博士 / 首席科学家</h3>\n    <div class="title">ASDF实验室主任 · 博士生导师</div>\n    <p>著名高能物理学家，曾获搞笑诺贝尔奖。</p>\n  </div>\n</div>'
+                      )
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入嘉宾 / 人物介绍卡片"
+                  >
+                    <User size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet('> **核心法则**：\n> 保持简单，最小化状态，单一职责驱动。')
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入重点金句卡片"
+                  >
+                    <Quote size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet(
+                        '<div class="callout callout-tip">\n  <div class="callout-title">💡 关键创新要点</div>\n  <p>结构化内容配合高精度排版组件，专注思考本质，带来出版级视觉质感。</p>\n</div>'
+                      )
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入语义提示框 (Callout: Tip/Note/Warning/Caution)"
+                  >
+                    <MessageSquarePlus size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet(
+                        '<div class="compare">\n  <div class="compare-before">\n    <h3>❌ 传统做法与痛点</h3>\n    <ul>\n      <li>机械拖拽耗费数小时</li>\n      <li>排版错乱、字体错位</li>\n    </ul>\n  </div>\n  <div class="compare-after">\n    <h3>✅ MarkSlide 现代方案</h3>\n    <ul>\n      <li>纯文本秒级出版级排版</li>\n      <li>单文件 HTML 零依赖分发</li>\n    </ul>\n  </div>\n</div>'
+                      )
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入前后对比面板 (Before vs After)"
+                  >
+                    <GitCompare size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet(
+                        '<span class="badge badge-success">稳定就绪</span> <span class="badge badge-info">v2.0 升级</span> <span class="badge badge-warning">注意</span>'
+                      )
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入彩色徽章标签 (.badge)"
+                  >
+                    <Tag size={14} />
+                  </button>
+
+                  <div className="h-3.5 w-px bg-[#232536] mx-1" />
+
+                  <button
+                    onClick={() =>
+                      insertSnippet(
+                        '```mermaid\nflowchart LR\n    Start([用户请求]) --> Process[分布式网关]\n    Process --> DB[(数据库持久化)]\n    DB --> Return([毫秒返回])\n```'
+                      )
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入 Mermaid 流程图"
+                  >
+                    <GitGraph size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet('$$\\mathcal{L}_{total} = \\lambda_1 \\mathcal{L}_{cls} + \\lambda_2 \\mathcal{L}_{reg}$$')
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入 KaTeX 数学公式"
+                  >
+                    <Sigma size={14} />
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      insertSnippet('```typescript\n// 核心调度入口\nexport async function dispatch(event: Event) {\n  console.log("dispatching", event.id);\n}\n```')
+                    }
+                    className="p-1.5 hover:text-sky-400 hover:bg-[#1e2133] rounded-md transition-colors text-[#8a91a8]"
+                    title="插入代码块"
+                  >
+                    <Code size={14} />
+                  </button>
+                </div>
+
+                {/* 右侧：主题选择器 + 字符统计 */}
+                <div className="flex items-center gap-2.5 shrink-0 pl-2">
+                  <div className="flex items-center gap-1.5 text-xs text-[#8a91a8] font-sans">
+                    <Palette size={13} className="text-sky-400" />
+                    <span className="text-[#8a91a8] text-xs hidden sm:inline">主题:</span>
+                    <select
+                      value={currentTheme}
+                      onChange={(e) => handleSelectTheme(e.target.value)}
+                      className="bg-[#191c2b] text-slate-200 text-xs px-2 py-0.5 rounded-md border border-[#2a2e44] focus:outline-none focus:border-sky-500 cursor-pointer font-medium hover:bg-[#202438] transition-colors"
+                      title="切换当前 PPT 主题样式 (自动同步修改文档 Frontmatter)"
+                    >
+                      {THEME_OPTIONS.map((theme) => (
+                        <option key={theme.id} value={theme.id}>
+                          {theme.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="h-3 w-px bg-[#232536]" />
+
+                  <span className="text-[#636b85] font-mono text-[11px]">
+                    {markdown.length} 字符
+                  </span>
+                </div>
+              </div>
+
+              {/* CodeMirror 6 极客 Markdown 编辑区（支持 Ctrl+V 粘贴截图与拖拽图片） */}
+              <div
+                onPaste={handlePaste}
+                onDrop={handleDrop}
+                className="flex-1 overflow-hidden relative font-mono text-xs bg-[#181a28]"
+              >
+                <CodeMirror
+                  ref={editorRef}
+                  value={markdown}
+                  height="100%"
+                  theme={oneDark}
+                  extensions={[langMarkdown()]}
+                  onChange={(val) => setMarkdown(val)}
+                  onUpdate={(viewUpdate) => {
+                    if (viewUpdate.selectionSet) {
+                      const pos = viewUpdate.state.selection.main.head;
+                      const targetSlide = getSlideIndexAtOffset(viewUpdate.state.doc.toString(), pos);
+                      setActivePreviewIndex((prev) => {
+                        const clamped = Math.max(0, Math.min(targetSlide, slideCount - 1));
+                        if (prev !== clamped) {
+                          setPreviewDirection('fade');
+                          return clamped;
+                        }
+                        return prev;
+                      });
+                    }
+                  }}
+                  className="h-full text-xs [&_.cm-scroller]:overflow-auto [&_.cm-editor]:h-full [&_.cm-gutters]:bg-[#181a28] [&_.cm-gutters]:border-r [&_.cm-gutters]:border-[#232536] [&_.cm-activeLineGutter]:bg-[#1f2235]"
+                  basicSetup={{
+                    lineNumbers: true,
+                    highlightActiveLineGutter: true,
+                    history: true,
+                    bracketMatching: true,
+                    closeBrackets: true,
+                    autocompletion: true,
+                    highlightActiveLine: true,
+                    foldGutter: true,
                   }}
                 />
               </div>
             </div>
+
+            {/* 左右分栏拖拽手柄 (Resizable Divider Handle) */}
+            {isPreviewOpen && (
+              <div
+                onMouseDown={handleMouseDown}
+                onDoubleClick={handleResetSplit}
+                className={`w-1.5 hover:w-2 bg-[#12131d] hover:bg-sky-500/80 active:bg-sky-400 border-x border-[#232536] cursor-col-resize select-none shrink-0 z-20 transition-all flex items-center justify-center group ${isDragging ? 'bg-sky-400 w-2' : ''
+                  }`}
+                title="拖动调整左右分栏宽度（双击复位 50%）"
+              >
+                <div className="w-[2px] h-6 bg-[#4e5572] group-hover:bg-white rounded-full transition-colors" />
+              </div>
+            )}
+
+            {/* 右侧高性能单页 16:9 实时预览窗（可折叠，宽度自动填充剩余空间） */}
+            {isPreviewOpen && (
+              <div
+                className={`flex-1 min-w-[320px] flex flex-col bg-[#10111a] select-none font-sans ${isDragging ? 'pointer-events-none' : ''
+                  }`}
+              >
+                {/* 预览窗顶部状态条 */}
+                <div className="h-9 px-4 border-b border-[#232536] bg-[#141520] flex items-center justify-between text-xs text-[#8a91a8]">
+                  <span className="text-[#8a91a8] font-mono text-[11px] flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
+                    16:9 实时视口 · {THEME_OPTIONS.find((t) => t.id === currentTheme)?.name}
+                    {previewMode === 'continuous' && (
+                      <span className="text-[#636b85] text-[10px] ml-1">({slideCount} 页连续流)</span>
+                    )}
+                  </span>
+
+                  <div className="flex items-center gap-2">
+                    {/* 视图模式切换胶囊：连续长卷流 ⇄ 单页聚焦 */}
+                    <button
+                      onClick={togglePreviewMode}
+                      className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#181a28] hover:bg-[#202336] border border-[#2a2e44] text-[#a2a9c4] hover:text-sky-300 transition-colors text-[11px] font-mono cursor-pointer"
+                      title={previewMode === 'continuous' ? '当前：连续长卷流（点击切换为单页聚焦）' : '当前：单页聚焦（点击切换为连续长卷流）'}
+                    >
+                      {previewMode === 'continuous' ? (
+                        <>
+                          <ScrollText size={12} className="text-sky-400" />
+                          <span>长卷</span>
+                        </>
+                      ) : (
+                        <>
+                          <Square size={12} className="text-indigo-400" />
+                          <span>单页</span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* 单页聚焦模式下的翻页胶囊 */}
+                    {previewMode === 'single' && (
+                      <div className="flex items-center gap-2 bg-[#181a28] px-2.5 py-0.5 rounded-full border border-[#2a2e44]">
+                        <button
+                          onClick={() => {
+                            setPreviewDirection('prev');
+                            setActivePreviewIndex((p: number) => Math.max(0, p - 1));
+                          }}
+                          disabled={activePreviewIndex === 0}
+                          className="p-0.5 hover:text-sky-400 disabled:opacity-20 transition-colors"
+                          title="上一页"
+                        >
+                          <ChevronLeft size={14} />
+                        </button>
+                        <span className="font-mono text-[11px] text-slate-200 font-semibold px-1">
+                          {activePreviewIndex + 1} / {slideCount}
+                        </span>
+                        <button
+                          onClick={() => {
+                            setPreviewDirection('next');
+                            setActivePreviewIndex((p: number) => Math.min(slideCount - 1, p + 1));
+                          }}
+                          disabled={activePreviewIndex === slideCount - 1}
+                          className="p-0.5 hover:text-sky-400 disabled:opacity-20 transition-colors"
+                          title="下一页"
+                        >
+                          <ChevronRight size={14} />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* 收起实时渲染窗口按钮 */}
+                    <button
+                      onClick={togglePreview}
+                      className="p-1 hover:text-slate-200 hover:bg-[#1f2235] rounded transition-colors text-[#717894]"
+                      title="收起实时渲染窗口 (Ctrl+J)"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* 预览视口主展示区：支持连续长卷与单页聚焦双模 */}
+                {previewMode === 'continuous' ? (
+                  /* 连续长卷流式展示区（支持纵向滚动、各单页直达、光标精准平滑对齐） */
+                  <div
+                    ref={previewBoxRef}
+                    className="flex-1 overflow-y-auto p-6 space-y-6 flex flex-col items-center select-none font-sans scroll-smooth no-scrollbar"
+                  >
+                    {parsedSlides.map((slideHtml, index) => {
+                      const isActive = activePreviewIndex === index;
+                      return (
+                        <div
+                          key={index}
+                          ref={(el) => {
+                            slideRefs.current[index] = el;
+                          }}
+                          onClick={() => setActivePreviewIndex(index)}
+                          className={`w-full max-w-[760px] aspect-[16/9] rounded-xl shadow-2xl overflow-hidden border transition-all flex items-center justify-center relative shrink-0 cursor-pointer bg-transparent ${isActive
+                            ? 'border-sky-500/80 ring-2 ring-sky-500/25 shadow-2xl shadow-black/80'
+                            : 'border-[#232536] hover:border-[#333852] shadow-xl shadow-black/60'
+                            }`}
+                        >
+                          {/* 优雅小巧的页码徽章 */}
+                          <div
+                            className={`absolute top-2.5 left-3 z-10 px-2 py-0.5 rounded-full font-mono text-[10px] font-semibold backdrop-blur-md border transition-colors ${isActive
+                              ? 'bg-[#151724]/90 border-sky-500/60 text-sky-300'
+                              : 'bg-[#141520]/90 border-[#2b2e44] text-[#8a91a8]'
+                              }`}
+                          >
+                            {index + 1}
+                          </div>
+
+                          <div
+                            className="w-full h-full flex items-center justify-center [&>div.marpit]:w-full [&>div.marpit]:h-full [&_svg[data-marpit-svg]]:w-full [&_svg[data-marpit-svg]]:h-full"
+                            dangerouslySetInnerHTML={{ __html: slideHtml }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  /* 单页聚焦居中展示区（支持滑动翻页动画） */
+                  <div
+                    ref={previewBoxRef}
+                    className="flex-1 flex items-center justify-center p-6 overflow-hidden"
+                  >
+                    <div className="w-full max-w-[760px] aspect-[16/9] rounded-xl shadow-2xl overflow-hidden border border-[#232536] transition-all flex items-center justify-center relative bg-transparent">
+                      <div
+                        key={activePreviewIndex}
+                        className={`w-full h-full ${previewDirection === 'next'
+                          ? 'animate-slide-next'
+                          : previewDirection === 'prev'
+                            ? 'animate-slide-prev'
+                            : 'animate-slide-in'
+                          } flex items-center justify-center [&>div.marpit]:w-full [&>div.marpit]:h-full [&_svg[data-marpit-svg]]:w-full [&_svg[data-marpit-svg]]:h-full`}
+                        dangerouslySetInnerHTML={{
+                          __html:
+                            parsedSlides[activePreviewIndex] ||
+                            '<div class="marpit"><section><h1>暂无内容</h1></section></div>',
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
+
+      {/* 磨砂毛玻璃登录 / 注册浮层（未登录首次访问自动呈现，叉掉即无感进入访客本地模式） */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => {
+          setIsAuthModalOpen(false);
+          try {
+            localStorage.setItem('hateppt_visited', 'true');
+          } catch { }
+        }}
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+          try {
+            localStorage.setItem('hateppt_user', JSON.stringify(user));
+            localStorage.setItem('hateppt_visited', 'true');
+          } catch { }
+        }}
+      />
+
+      {/* 快捷键速查说明弹窗 */}
+      <ShortcutsModal
+        isOpen={isShortcutsOpen}
+        onClose={() => setIsShortcutsOpen(false)}
+      />
+
+      {/* 会员订阅与云端特权弹窗 */}
+      <SubscriptionModal
+        isOpen={isSubscriptionOpen}
+        onClose={() => setIsSubscriptionOpen(false)}
+        currentUser={currentUser}
+        onUpgradeToPro={handleUpgradeToPro}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
+        onLogout={handleLogout}
+      />
     </div>
   );
 };
