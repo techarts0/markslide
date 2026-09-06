@@ -203,8 +203,17 @@ export function exportStandaloneHtml(title: string, slidesHtml: string, slidesCs
         } else if (e.key === 'f' || e.key === 'F') {
           document.getElementById('btn-fs').click();
         }
-      });
     })();
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>
+    if (window.mermaid) {
+      mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+      var mermaidNodes = document.querySelectorAll('code.language-mermaid, .mermaid, pre.mermaid, code.mermaid, [data-mermaid]');
+      if (mermaidNodes.length > 0) {
+        mermaid.run({ nodes: mermaidNodes });
+      }
+    }
   </script>
 </body>
 </html>`;

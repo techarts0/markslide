@@ -110,10 +110,22 @@ export class SlideCompiler {
     }
   }
 
+  /**
+   * 将 HTML 块内部未被解析的 ```mermaid ... ``` 代码块转换为标准 HTML 结构
+   * 确保进入 DOM 后能被 renderMermaidElements 识别并渲染
+   */
+  public transformMermaidInHtml(html: string): string {
+    if (!html || !html.includes('```mermaid')) return html;
+    return html.replace(/```mermaid\s*([\s\S]*?)```/g, (_match, code) => {
+      return `<pre class="mermaid-diagram-pre"><code class="language-mermaid">${code.trim()}</code></pre>`;
+    });
+  }
+
   public render(markdown: string): { html: string; css: string; count: number } {
     try {
       const { html, css } = this.marp.render(markdown);
-      const enhancedHtml = this.renderMathInHtmlString(html);
+      const withMermaid = this.transformMermaidInHtml(html);
+      const enhancedHtml = this.renderMathInHtmlString(withMermaid);
       const matches = enhancedHtml.match(/<section/g);
       const count = matches ? matches.length : 1;
       return { html: enhancedHtml, css, count };
@@ -128,8 +140,30 @@ export class SlideCompiler {
   }
 
   public async renderMermaidElements(container: HTMLElement, isDarkTheme: boolean = false) {
-    const mermaidElements = container.querySelectorAll('code.language-mermaid');
-    if (!mermaidElements || mermaidElements.length === 0) return;
+    // 查找所有候选 Mermaid 节点：
+    // 1. 标准 markdown 代码块: pre > code.language-mermaid
+    // 2. 类名标识: .mermaid, code.mermaid, pre.mermaid, div.mermaid
+    // 3. 自定义属性: [data-mermaid]
+    const candidates = Array.from(
+      container.querySelectorAll<HTMLElement>(
+        'code.language-mermaid, .mermaid, pre.mermaid, code.mermaid, [data-mermaid]'
+      )
+    );
+    if (!candidates || candidates.length === 0) return;
+
+    // 过滤：如果 pre 包含 code.language-mermaid，只保留 code，避免同一个图重复渲染
+    const elementsToRender: HTMLElement[] = [];
+    for (const el of candidates) {
+      if (el.tagName.toLowerCase() === 'pre' && el.querySelector('code.language-mermaid, code.mermaid')) {
+        continue;
+      }
+      if (el.hasAttribute('data-mermaid-processed')) {
+        continue;
+      }
+      elementsToRender.push(el);
+    }
+
+    if (elementsToRender.length === 0) return;
 
     // 动态初始化适合该主题的配色
     mermaid.initialize({
@@ -139,23 +173,34 @@ export class SlideCompiler {
       fontFamily: 'inherit',
     });
 
-    for (let i = 0; i < mermaidElements.length; i++) {
-      const element = mermaidElements[i] as HTMLElement;
-      const code = element.textContent || '';
-      const id = `mermaid-svg-${Date.now()}-${i}`;
+    for (let i = 0; i < elementsToRender.length; i++) {
+      const element = elementsToRender[i];
+      element.setAttribute('data-mermaid-processed', 'true');
+      const code = (element.textContent || '').trim();
+      if (!code) continue;
+
+      const id = `mermaid-svg-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`;
       try {
         const { svg } = await mermaid.render(id, code);
         const parent = element.parentElement;
         if (parent && parent.tagName.toLowerCase() === 'pre') {
           const wrapper = document.createElement('div');
-          wrapper.className = 'mermaid-diagram flex justify-center items-center my-4';
+          wrapper.className = 'mermaid-diagram flex justify-center items-center my-4 w-full overflow-hidden';
           wrapper.innerHTML = svg;
           parent.replaceWith(wrapper);
+        } else if (element.tagName.toLowerCase() === 'pre') {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'mermaid-diagram flex justify-center items-center my-4 w-full overflow-hidden';
+          wrapper.innerHTML = svg;
+          element.replaceWith(wrapper);
         } else {
           element.innerHTML = svg;
+          element.classList.add('mermaid-diagram', 'flex', 'justify-center', 'items-center', 'my-2', 'w-full', 'overflow-hidden');
         }
       } catch (err) {
         console.error('Mermaid render error for diagram:', err);
+        const dirtyEl = document.getElementById(`d${id}`) || document.getElementById(id);
+        if (dirtyEl) dirtyEl.remove();
         element.innerHTML = `<span style="color: #ef4444; font-size: 14px;">[Mermaid 语法错误: ${(err as Error).message}]</span>`;
       }
     }
