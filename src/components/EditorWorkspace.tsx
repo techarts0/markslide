@@ -249,7 +249,10 @@ flowchart LR
 
 $$T(n) = 2T\\left(\\frac{n}{2}\\right) + \\mathcal{O}(1) \\implies T(n) = \\mathcal{O}(\\log n)$$
 
-公式在暗色与亮色主题下均会自动适配背景色块与对比度，确保高校答辩与科研研讨会的清晰严谨。
+<div class="callout callout-note">
+  <div class="callout-title">📘 HTML 容器原生支持：<h3>$a^2 + b^2 = c^2$</h3></div>
+  <p>无论是 Markdown 还是 <code>&lt;h3&gt;</code>、<code>&lt;div&gt;</code>、<code>&lt;td&gt;</code> 等 HTML 标签内部的公式，均可出版级渲染！</p>
+</div>
 
 ---
 
@@ -565,7 +568,7 @@ export const EditorWorkspace: React.FC<EditorWorkspaceProps> = ({ onStartPresent
             <div className="flex items-center gap-2 text-cyan-400">
               <Terminal size={17} className="text-cyan-400" />
               <span className="font-bold text-sm tracking-wider text-slate-100 font-sans">
-                MarkSlide Studio<span className="text-cyan-400 font-mono text-xs ml-1 font-normal">Max Pro Ultra Extreme ... </span>
+                HATE PPT<span className="text-cyan-400 font-mono text-xs ml-1 font-normal"> Markdown to Slide </span>
               </span>
             </div>
 
